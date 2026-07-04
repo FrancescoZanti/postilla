@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Postilla",
+  "version": "0.1.0",
+  "identifier": "com.fzanti.postilla",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Postilla",
+        "width": 1024,
+        "height": 768
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://api.keygen.sh/v1/accounts/bb57e8aa-625f-42d2-b5b2-b308796e872e/products/4138ca3d-6125-4cbf-954f-7c921f34fc78/releases/tauri/update?version={{current_version}}&target={{target}}&arch={{arch}}"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJFNzFGMEYwRDgwMUQzMjYKUldRbTB3SFk4UEJ4dnFjS0IrekdmUGUzQkFVL3o2b3QyNzNrSWswMXAvbHFwS1VYR2lZLzZBakcK"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

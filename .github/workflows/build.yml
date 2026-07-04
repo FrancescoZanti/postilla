@@ -1,0 +1,273 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g. 0.1.0)'
+        required: true
+
+env:
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+  KEYGEN_ACCOUNT_ID: bb57e8aa-625f-42d2-b5b2-b308796e872e
+  KEYGEN_PRODUCT_ID: 4138ca3d-6125-4cbf-954f-7c921f34fc78
+
+jobs:
+  get-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+    steps:
+      - id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
+
+  # ────────────────────────────────────────────────────────
+  # Ubuntu (.deb + .AppImage)
+  # ────────────────────────────────────────────────────────
+  build-ubuntu:
+    needs: get-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: npm run tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu
+          path: src-tauri/target/release/bundle/**/*
+          if-no-files-found: warn
+
+  # ────────────────────────────────────────────────────────
+  # Windows (.msi + .exe)
+  # ────────────────────────────────────────────────────────
+  build-windows:
+    needs: get-version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: npm run tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: src-tauri\target\release\bundle\**\*
+          if-no-files-found: warn
+
+  # ────────────────────────────────────────────────────────
+  # Fedora (.rpm)
+  # ────────────────────────────────────────────────────────
+  build-fedora:
+    needs: get-version
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:latest
+      options: --user root
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          dnf install -y gcc-c++ make glib2-devel \
+            webkit2gtk4.1-devel libxdo-devel openssl-devel \
+            libappindicator-gtk3-devel librsvg2-devel \
+            file wget curl which perl
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install Node.js
+        run: |
+          curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+          dnf install -y nodejs
+
+      - name: Build (RPM only — AppImage built on Ubuntu)
+        run: npm run tauri build -- --bundles rpm
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fedora
+          path: src-tauri/target/release/bundle/**/*
+          if-no-files-found: warn
+
+  # ────────────────────────────────────────────────────────
+  # Publish to Keygen.sh Releases
+  # ────────────────────────────────────────────────────────
+  publish-keygen:
+    needs: [get-version, build-ubuntu, build-windows, build-fedora]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*'
+          merge-multiple: true
+
+      - name: List all artifacts
+        run: ls -lhR
+
+      - name: Create release on Keygen.sh
+        id: create_release
+        run: |
+          VERSION="${{ needs.get-version.outputs.version }}"
+          ACCOUNT="${{ env.KEYGEN_ACCOUNT_ID }}"
+          PRODUCT="${{ env.KEYGEN_PRODUCT_ID }}"
+          TOKEN="${{ secrets.KEYGEN_API_TOKEN }}"
+
+          # Check if release already exists
+          EXISTING=$(curl -s "https://api.keygen.sh/v1/accounts/$ACCOUNT/releases?product=$PRODUCT&version=$VERSION" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.api+json")
+
+          RELEASE_ID=$(echo "$EXISTING" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+ids = [d['id'] for d in data.get('data', []) if d.get('attributes', {}).get('version') == '$VERSION']
+print(ids[0] if ids else '')
+" 2>/dev/null || echo "")
+
+          if [ -n "$RELEASE_ID" ]; then
+            echo "Release v$VERSION already exists (ID: $RELEASE_ID)"
+            echo "RELEASE_ID=$RELEASE_ID" >> $GITHUB_OUTPUT
+          else
+            echo "Creating release v$VERSION..."
+            RESP=$(curl -s -X POST "https://api.keygen.sh/v1/accounts/$ACCOUNT/releases" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/vnd.api+json" \
+              -H "Accept: application/vnd.api+json" \
+              -d "{
+                \"data\": {
+                  \"type\": \"releases\",
+                  \"attributes\": {
+                    \"version\": \"$VERSION\",
+                    \"name\": \"Postilla v$VERSION\",
+                    \"tag\": \"v$VERSION\",
+                    \"channel\": \"tauri\"
+                  },
+                  \"relationships\": {
+                    \"product\": {
+                      \"data\": { \"type\": \"products\", \"id\": \"$PRODUCT\" }
+                    }
+                  }
+                }
+              }")
+
+            RELEASE_ID=$(echo "$RESP" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print(data.get('data', {}).get('id', ''))
+" 2>/dev/null || echo "")
+
+            echo "Created release ID: $RELEASE_ID"
+            echo "RELEASE_ID=$RELEASE_ID" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload artifacts to Keygen
+        if: steps.create_release.outputs.RELEASE_ID != ''
+        run: |
+          VERSION="${{ needs.get-version.outputs.version }}"
+          ACCOUNT="${{ env.KEYGEN_ACCOUNT_ID }}"
+          TOKEN="${{ secrets.KEYGEN_API_TOKEN }}"
+          RELEASE_ID="${{ steps.create_release.outputs.RELEASE_ID }}"
+
+          # Infer platform/arch from file name patterns
+          upload_artifact() {
+            local FILE="$1"
+            local PLATFORM="$2"
+            local ARCH="$3"
+
+            echo "Uploading: $FILE → platform=$PLATFORM arch=$ARCH"
+            curl -s -X POST "https://api.keygen.sh/v1/accounts/$ACCOUNT/releases/$RELEASE_ID/artifacts" \
+              -H "Authorization: Bearer $TOKEN" \
+              -F "artifact[platform]=$PLATFORM" \
+              -F "artifact[arch]=$ARCH" \
+              -F "artifact[file]=@$FILE"
+            echo ""
+          }
+
+          # Upload each file with appropriate platform tag
+          for f in *.deb; do
+            [ -f "$f" ] && upload_artifact "$f" "linux-deb" "amd64"
+          done
+
+          for f in *.rpm; do
+            [ -f "$f" ] && upload_artifact "$f" "linux-rpm" "amd64"
+          done
+
+          for f in *.AppImage; do
+            [ -f "$f" ] && upload_artifact "$f" "linux-appimage" "amd64"
+          done
+
+          for f in *.msi; do
+            [ -f "$f" ] && upload_artifact "$f" "windows-msi" "x86_64"
+          done
+
+          for f in *.exe; do
+            [ -f "$f" ] && upload_artifact "$f" "windows-exe" "x86_64"
+          done
+
+          # Updater archives + signatures (Tauri uses .tar.gz / .zip + .sig)
+          for f in *.tar.gz *.tgz; do
+            [ -f "$f" ] && upload_artifact "$f" "updater" "amd64"
+          done
+
+          for f in *.zip; do
+            [ -f "$f" ] && upload_artifact "$f" "updater" "x86_64"
+          done
+
+          for f in *.sig; do
+            [ -f "$f" ] && upload_artifact "$f" "signature" "amd64"
+          done
+
+      - name: Summary
+        run: |
+          echo "✅ Release v${{ needs.get-version.outputs.version }} pubblicata su Keygen.sh"
+          echo ""
+          echo "Files caricati:"
+          ls -lh
