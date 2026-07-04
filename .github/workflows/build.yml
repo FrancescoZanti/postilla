@@ -165,44 +165,23 @@ jobs:
             -H "Authorization: Bearer $TOKEN" \
             -H "Accept: application/vnd.api+json")
 
-          RELEASE_ID=$(echo "$EXISTING" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-ids = [d['id'] for d in data.get('data', []) if d.get('attributes', {}).get('version') == '$VERSION']
-print(ids[0] if ids else '')
-" 2>/dev/null || echo "")
+          RELEASE_ID=$(echo "$EXISTING" | jq -r --arg ver "$VERSION" \
+            '.data[] | select(.attributes.version == $ver) | .id' 2>/dev/null || echo "")
 
           if [ -n "$RELEASE_ID" ]; then
             echo "Release v$VERSION already exists (ID: $RELEASE_ID)"
             echo "RELEASE_ID=$RELEASE_ID" >> $GITHUB_OUTPUT
           else
             echo "Creating release v$VERSION..."
+            JSON=$(jq -n --arg ver "$VERSION" --arg pid "$PRODUCT" \
+              '{data: {type: "releases", attributes: {version: $ver, name: "Postilla v\($ver)", tag: "v\($ver)", channel: "tauri"}, relationships: {product: {data: {type: "products", id: $pid}}}}}')
             RESP=$(curl -s -X POST "https://api.keygen.sh/v1/accounts/$ACCOUNT/releases" \
               -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/vnd.api+json" \
               -H "Accept: application/vnd.api+json" \
-              -d "{
-                \"data\": {
-                  \"type\": \"releases\",
-                  \"attributes\": {
-                    \"version\": \"$VERSION\",
-                    \"name\": \"Postilla v$VERSION\",
-                    \"tag\": \"v$VERSION\",
-                    \"channel\": \"tauri\"
-                  },
-                  \"relationships\": {
-                    \"product\": {
-                      \"data\": { \"type\": \"products\", \"id\": \"$PRODUCT\" }
-                    }
-                  }
-                }
-              }")
+              -d "$JSON")
 
-            RELEASE_ID=$(echo "$RESP" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-print(data.get('data', {}).get('id', ''))
-" 2>/dev/null || echo "")
+            RELEASE_ID=$(echo "$RESP" | jq -r '.data.id' 2>/dev/null || echo "")
 
             echo "Created release ID: $RELEASE_ID"
             echo "RELEASE_ID=$RELEASE_ID" >> $GITHUB_OUTPUT
@@ -267,7 +246,7 @@ print(data.get('data', {}).get('id', ''))
 
       - name: Summary
         run: |
-          echo "✅ Release v${{ needs.get-version.outputs.version }} pubblicata su Keygen.sh"
+          echo "Release v${{ needs.get-version.outputs.version }} pubblicata su Keygen.sh"
           echo ""
           echo "Files caricati:"
           ls -lh
