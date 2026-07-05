@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to build (e.g. 0.1.0)'
+        description: 'Version to build (e.g. 0.3.0)'
         required: true
 
 env:
@@ -43,6 +43,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
             build-essential \
             curl \
             file \
@@ -54,6 +55,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -81,6 +86,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -93,7 +102,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: src-tauri\target\release\bundle\**\*
+          path: src-tauri/target/release/bundle/**/*
           if-no-files-found: warn
 
   # ────────────────────────────────────────────────────────
@@ -125,7 +134,10 @@ jobs:
           curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
           dnf install -y nodejs
 
-      - name: Build (RPM only — AppImage built on Ubuntu)
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build (RPM only)
         run: npm run tauri build -- --bundles rpm
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
@@ -160,7 +172,6 @@ jobs:
           PRODUCT="${{ env.KEYGEN_PRODUCT_ID }}"
           TOKEN="${{ secrets.KEYGEN_API_TOKEN }}"
 
-          # Check if release already exists
           EXISTING=$(curl -s "https://api.keygen.sh/v1/accounts/$ACCOUNT/releases?product=$PRODUCT&version=$VERSION" \
             -H "Authorization: Bearer $TOKEN" \
             -H "Accept: application/vnd.api+json")
@@ -195,12 +206,10 @@ jobs:
           TOKEN="${{ secrets.KEYGEN_API_TOKEN }}"
           RELEASE_ID="${{ steps.create_release.outputs.RELEASE_ID }}"
 
-          # Infer platform/arch from file name patterns
           upload_artifact() {
             local FILE="$1"
             local PLATFORM="$2"
             local ARCH="$3"
-
             echo "Uploading: $FILE → platform=$PLATFORM arch=$ARCH"
             curl -s -X POST "https://api.keygen.sh/v1/accounts/$ACCOUNT/releases/$RELEASE_ID/artifacts" \
               -H "Authorization: Bearer $TOKEN" \
@@ -210,43 +219,18 @@ jobs:
             echo ""
           }
 
-          # Upload each file with appropriate platform tag
-          for f in *.deb; do
-            [ -f "$f" ] && upload_artifact "$f" "linux-deb" "amd64"
-          done
-
-          for f in *.rpm; do
-            [ -f "$f" ] && upload_artifact "$f" "linux-rpm" "amd64"
-          done
-
-          for f in *.AppImage; do
-            [ -f "$f" ] && upload_artifact "$f" "linux-appimage" "amd64"
-          done
-
-          for f in *.msi; do
-            [ -f "$f" ] && upload_artifact "$f" "windows-msi" "x86_64"
-          done
-
-          for f in *.exe; do
-            [ -f "$f" ] && upload_artifact "$f" "windows-exe" "x86_64"
-          done
-
-          # Updater archives + signatures (Tauri uses .tar.gz / .zip + .sig)
-          for f in *.tar.gz *.tgz; do
-            [ -f "$f" ] && upload_artifact "$f" "updater" "amd64"
-          done
-
-          for f in *.zip; do
-            [ -f "$f" ] && upload_artifact "$f" "updater" "x86_64"
-          done
-
-          for f in *.sig; do
-            [ -f "$f" ] && upload_artifact "$f" "signature" "amd64"
-          done
+          for f in *.deb; do [ -f "$f" ] && upload_artifact "$f" "linux-deb" "amd64"; done
+          for f in *.rpm; do [ -f "$f" ] && upload_artifact "$f" "linux-rpm" "amd64"; done
+          for f in *.AppImage; do [ -f "$f" ] && upload_artifact "$f" "linux-appimage" "amd64"; done
+          for f in *.msi; do [ -f "$f" ] && upload_artifact "$f" "windows-msi" "x86_64"; done
+          for f in *.exe; do [ -f "$f" ] && upload_artifact "$f" "windows-exe" "x86_64"; done
+          for f in *.tar.gz *.tgz; do [ -f "$f" ] && upload_artifact "$f" "updater" "amd64"; done
+          for f in *.zip; do [ -f "$f" ] && upload_artifact "$f" "updater" "x86_64"; done
+          for f in *.sig; do [ -f "$f" ] && upload_artifact "$f" "signature" "amd64"; done
 
       - name: Summary
         run: |
-          echo "Release v${{ needs.get-version.outputs.version }} pubblicata su Keygen.sh"
+          echo "Release v${{ needs.get-version.outputs.version }} published on Keygen.sh"
           echo ""
-          echo "Files caricati:"
+          echo "Artifacts uploaded:"
           ls -lh
