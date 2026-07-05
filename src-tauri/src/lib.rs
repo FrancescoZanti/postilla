@@ -2,8 +2,9 @@ pub mod db;
 pub mod transcribe;
 pub mod llm;
 pub mod license;
+pub mod remote_llm;
 
-use db::{Session, init_db};
+use db::{Session, Template, ExportTemplate, init_db};
 use rusqlite::Connection;
 use std::sync::Mutex;
 use std::fs;
@@ -11,9 +12,11 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State, Emitter};
 use chrono::Utc;
 use machine_uid;
+use serde::Serialize;
 
 pub struct AppState {
     pub db: Mutex<Option<Connection>>,
+    pub ollama_url: Mutex<String>,
 }
 
 #[tauri::command]
@@ -38,7 +41,7 @@ fn get_sessions(state: State<'_, AppState>) -> Result<Vec<Session>, String> {
     let conn = db_guard.as_ref().ok_or("Database not initialized")?;
 
     let mut stmt = conn
-        .prepare("SELECT id, session_type, title, created_at, updated_at, status, file_path, transcript, summary FROM sessions ORDER BY created_at DESC")
+        .prepare("SELECT id, session_type, title, created_at, updated_at, status, file_path, transcript, summary, mind_map, template_id, participants, tags FROM sessions ORDER BY created_at DESC")
         .map_err(|e| e.to_string())?;
 
     let session_iter = stmt
@@ -53,6 +56,10 @@ fn get_sessions(state: State<'_, AppState>) -> Result<Vec<Session>, String> {
                 file_path: row.get(6).unwrap_or(None),
                 transcript: row.get(7).unwrap_or(None),
                 summary: row.get(8).unwrap_or(None),
+                mind_map: row.get(9).unwrap_or(None),
+                template_id: row.get(10).unwrap_or(None),
+                participants: row.get(11).unwrap_or(None),
+                tags: row.get(12).unwrap_or(None),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -66,16 +73,18 @@ fn get_sessions(state: State<'_, AppState>) -> Result<Vec<Session>, String> {
 }
 
 #[tauri::command]
-fn create_session(state: State<'_, AppState>, session_type: String, title: String) -> Result<Session, String> {
+fn create_session(state: State<'_, AppState>, session_type: String, participants: Option<String>) -> Result<Session, String> {
     let db_guard = state.db.lock().unwrap();
     let conn = db_guard.as_ref().ok_or("Database not initialized")?;
 
     let now = Utc::now().to_rfc3339();
+    let title = "Nuova sessione".to_string();
     let status = "pending".to_string();
+    let participants = participants.unwrap_or_default();
 
     conn.execute(
-        "INSERT INTO sessions (session_type, title, created_at, updated_at, status) VALUES (?1, ?2, ?3, ?4, ?5)",
-        (&session_type, &title, &now, &now, &status),
+        "INSERT INTO sessions (session_type, title, created_at, updated_at, status, participants) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        (&session_type, &title, &now, &now, &status, &participants),
     )
     .map_err(|e| e.to_string())?;
 
@@ -91,6 +100,10 @@ fn create_session(state: State<'_, AppState>, session_type: String, title: Strin
         file_path: None,
         transcript: None,
         summary: None,
+        mind_map: None,
+        template_id: None,
+        participants: Some(participants).filter(|p| !p.is_empty()),
+        tags: None,
     })
 }
 
@@ -175,6 +188,7 @@ async fn transcribe_session(app: AppHandle, state: State<'_, AppState>, session_
             "UPDATE sessions SET transcript = ?1, status = 'completed' WHERE id = ?2",
             (&transcript, &session_id),
         ).map_err(|e| e.to_string())?;
+        db::rebuild_fts(conn);
     }
 
     Ok(transcript)
@@ -182,25 +196,62 @@ async fn transcribe_session(app: AppHandle, state: State<'_, AppState>, session_
 
 
 #[tauri::command]
-async fn get_ollama_models() -> Result<Vec<llm::EvaluatedModel>, String> {
-    llm::get_available_models().await
+async fn get_ollama_models(state: State<'_, AppState>) -> Result<Vec<llm::EvaluatedModel>, String> {
+    let url = state.ollama_url.lock().unwrap().clone();
+    llm::get_available_models_at(&url).await
 }
 
 #[tauri::command]
-async fn summarize_session(state: State<'_, AppState>, session_id: i64, model: String) -> Result<String, String> {
-    // 1. Get transcript from DB
-    let transcript = {
+async fn discover_ollama() -> Vec<llm::OllamaInstance> {
+    llm::discover_ollama_instances().await
+}
+
+#[tauri::command]
+fn set_ollama_url(state: State<'_, AppState>, url: String) {
+    let mut stored = state.ollama_url.lock().unwrap();
+    *stored = url;
+}
+
+#[tauri::command]
+async fn summarize_session(state: State<'_, AppState>, session_id: i64, provider: String, api_key: String, model: String, template_id: Option<i64>) -> Result<String, String> {
+    let (transcript, session_type) = {
         let db_guard = state.db.lock().unwrap();
         let conn = db_guard.as_ref().ok_or("Database not initialized")?;
-        let mut stmt = conn.prepare("SELECT transcript FROM sessions WHERE id = ?1").unwrap();
-        let text: Option<String> = stmt.query_row([&session_id], |row| row.get(0)).unwrap_or(None);
-        text.ok_or("No transcript found for this session to summarize.")?
+        let mut stmt = conn.prepare("SELECT transcript, session_type FROM sessions WHERE id = ?1").unwrap();
+        stmt.query_row([&session_id], |row| {
+            let t: Option<String> = row.get(0).unwrap_or(None);
+            let st: String = row.get(1).unwrap_or_default();
+            Ok((t, st))
+        }).map_err(|e| format!("Session not found: {}", e))?
     };
 
-    // 2. Call Ollama local LLM
-    let summary = llm::generate_summary(&transcript, &model).await?;
+    let transcript = transcript.ok_or("No transcript found for this session to summarize.")?;
 
-    // 3. Update DB
+    // Resolve system prompt
+    let system_prompt = if let Some(tid) = template_id {
+        let db_guard = state.db.lock().unwrap();
+        let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+        let prompt: Option<String> = conn.query_row(
+            "SELECT system_prompt FROM templates WHERE id = ?1",
+            [&tid],
+            |row| row.get(0),
+        ).ok();
+        prompt
+    } else {
+        // Use default template for session_type
+        let db_guard = state.db.lock().unwrap();
+        let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+        let prompt: Option<String> = conn.query_row(
+            "SELECT system_prompt FROM templates WHERE session_type = ?1 LIMIT 1",
+            [&session_type],
+            |row| row.get(0),
+        ).ok();
+        prompt
+    };
+
+    let ollama_url = state.ollama_url.lock().unwrap().clone();
+    let summary = llm::dispatch_summary(&provider, &api_key, &model, &transcript, system_prompt.as_deref(), &ollama_url).await?;
+
     {
         let db_guard = state.db.lock().unwrap();
         let conn = db_guard.as_ref().ok_or("Database not initialized")?;
@@ -208,9 +259,562 @@ async fn summarize_session(state: State<'_, AppState>, session_id: i64, model: S
             "UPDATE sessions SET summary = ?1 WHERE id = ?2",
             (&summary, &session_id),
         ).map_err(|e| e.to_string())?;
+        db::rebuild_fts(conn);
     }
 
     Ok(summary)
+}
+
+#[tauri::command]
+async fn generate_session_title(state: State<'_, AppState>, session_id: i64, provider: String, api_key: String, model: String) -> Result<String, String> {
+    let (transcript, session_type) = {
+        let db_guard = state.db.lock().unwrap();
+        let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+        let mut stmt = conn.prepare("SELECT transcript, session_type FROM sessions WHERE id = ?1").unwrap();
+        stmt.query_row([&session_id], |row| {
+            let t: Option<String> = row.get(0).unwrap_or(None);
+            let st: String = row.get(1).unwrap_or_default();
+            Ok((t, st))
+        }).map_err(|e| format!("Session not found: {}", e))?
+    };
+
+    let transcript = transcript.ok_or("No transcript available. Transcribe the session first.")?;
+    let ollama_url = state.ollama_url.lock().unwrap().clone();
+    let title = llm::dispatch_title(&provider, &api_key, &model, &transcript, &session_type, &ollama_url).await?;
+
+    {
+        let db_guard = state.db.lock().unwrap();
+        let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+        conn.execute(
+            "UPDATE sessions SET title = ?1 WHERE id = ?2",
+            (&title, &session_id),
+        ).map_err(|e| e.to_string())?;
+        db::rebuild_fts(conn);
+    }
+
+    Ok(title)
+}
+
+#[tauri::command]
+async fn generate_mind_map(state: State<'_, AppState>, session_id: i64, provider: String, api_key: String, model: String) -> Result<String, String> {
+    let (transcript, summary, session_type) = {
+        let db_guard = state.db.lock().unwrap();
+        let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+        let mut stmt = conn.prepare("SELECT transcript, summary, session_type FROM sessions WHERE id = ?1").unwrap();
+        stmt.query_row([&session_id], |row| {
+            let t: Option<String> = row.get(0).unwrap_or(None);
+            let s: Option<String> = row.get(1).unwrap_or(None);
+            let st: String = row.get(2).unwrap_or_default();
+            Ok((t, s, st))
+        }).map_err(|e| format!("Session not found: {}", e))?
+    };
+
+    let transcript = transcript.ok_or("No transcript available.")?;
+    let ollama_url = state.ollama_url.lock().unwrap().clone();
+    let mind_map = llm::dispatch_mind_map(&provider, &api_key, &model, &transcript, summary.as_deref(), &session_type, &ollama_url).await?;
+
+    {
+        let db_guard = state.db.lock().unwrap();
+        let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+        conn.execute(
+            "UPDATE sessions SET mind_map = ?1 WHERE id = ?2",
+            (&mind_map, &session_id),
+        ).map_err(|e| e.to_string())?;
+    }
+
+    Ok(mind_map)
+}
+
+#[tauri::command]
+fn update_session_type(state: State<'_, AppState>, session_id: i64, session_type: String) -> Result<(), String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE sessions SET session_type = ?1, updated_at = ?2 WHERE id = ?3",
+        (&session_type, &now, &session_id),
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn update_session_title(state: State<'_, AppState>, session_id: i64, title: String) -> Result<(), String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE sessions SET title = ?1, updated_at = ?2 WHERE id = ?3",
+        (&title, &now, &session_id),
+    ).map_err(|e| e.to_string())?;
+    db::rebuild_fts(conn);
+    Ok(())
+}
+
+#[tauri::command]
+fn update_session_transcript(state: State<'_, AppState>, session_id: i64, transcript: String) -> Result<(), String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    conn.execute(
+        "UPDATE sessions SET transcript = ?1 WHERE id = ?2",
+        (&transcript, &session_id),
+    ).map_err(|e| e.to_string())?;
+    db::rebuild_fts(conn);
+    Ok(())
+}
+
+#[tauri::command]
+fn update_session_summary(state: State<'_, AppState>, session_id: i64, summary: String) -> Result<(), String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    conn.execute(
+        "UPDATE sessions SET summary = ?1 WHERE id = ?2",
+        (&summary, &session_id),
+    ).map_err(|e| e.to_string())?;
+    db::rebuild_fts(conn);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_templates(state: State<'_, AppState>) -> Result<Vec<Template>, String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+
+    let mut stmt = conn
+        .prepare("SELECT id, name, session_type, system_prompt FROM templates ORDER BY session_type, id")
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(Template {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                session_type: row.get(2)?,
+                system_prompt: row.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut templates = Vec::new();
+    for row in rows {
+        templates.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(templates)
+}
+
+#[tauri::command]
+fn save_template(state: State<'_, AppState>, id: Option<i64>, name: String, session_type: String, system_prompt: String) -> Result<Template, String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+
+    if let Some(tid) = id {
+        conn.execute(
+            "UPDATE templates SET name = ?1, session_type = ?2, system_prompt = ?3 WHERE id = ?4",
+            (&name, &session_type, &system_prompt, &tid),
+        ).map_err(|e| e.to_string())?;
+        Ok(Template { id: tid, name, session_type, system_prompt })
+    } else {
+        conn.execute(
+            "INSERT INTO templates (name, session_type, system_prompt) VALUES (?1, ?2, ?3)",
+            (&name, &session_type, &system_prompt),
+        ).map_err(|e| e.to_string())?;
+        let new_id = conn.last_insert_rowid();
+        Ok(Template { id: new_id, name, session_type, system_prompt })
+    }
+}
+
+#[tauri::command]
+fn delete_template(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    conn.execute("DELETE FROM templates WHERE id = ?1", [&id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn update_session_participants(state: State<'_, AppState>, session_id: i64, participants: String) -> Result<(), String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE sessions SET participants = ?1, updated_at = ?2 WHERE id = ?3",
+        (&participants, &now, &session_id),
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn update_session_tags(state: State<'_, AppState>, session_id: i64, tags: String) -> Result<(), String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE sessions SET tags = ?1, updated_at = ?2 WHERE id = ?3",
+        (&tags, &now, &session_id),
+    ).map_err(|e| e.to_string())?;
+    db::rebuild_fts(conn);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_export_templates(state: State<'_, AppState>) -> Result<Vec<ExportTemplate>, String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    let mut stmt = conn.prepare("SELECT id, name, body FROM export_templates ORDER BY id")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ExportTemplate { id: row.get(0)?, name: row.get(1)?, body: row.get(2)? })
+    }).map_err(|e| e.to_string())?;
+    let mut templates = Vec::new();
+    for row in rows { templates.push(row.map_err(|e| e.to_string())?); }
+    Ok(templates)
+}
+
+#[tauri::command]
+fn save_export_template(state: State<'_, AppState>, id: Option<i64>, name: String, body: String) -> Result<ExportTemplate, String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    if let Some(tid) = id {
+        conn.execute("UPDATE export_templates SET name = ?1, body = ?2 WHERE id = ?3", (&name, &body, &tid))
+            .map_err(|e| e.to_string())?;
+        Ok(ExportTemplate { id: tid, name, body })
+    } else {
+        conn.execute("INSERT INTO export_templates (name, body) VALUES (?1, ?2)", (&name, &body))
+            .map_err(|e| e.to_string())?;
+        Ok(ExportTemplate { id: conn.last_insert_rowid(), name, body })
+    }
+}
+
+#[tauri::command]
+fn delete_export_template(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    conn.execute("DELETE FROM export_templates WHERE id = ?1", [&id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn export_session_with_template(state: State<'_, AppState>, session_id: i64, template_id: i64) -> Result<String, String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+
+    let session = conn.query_row(
+        "SELECT id, session_type, title, created_at, updated_at, status, file_path, transcript, summary, mind_map, template_id, participants, tags FROM sessions WHERE id = ?1",
+        [&session_id],
+        |row| {
+            Ok(Session {
+                id: row.get(0)?, session_type: row.get(1)?, title: row.get(2)?,
+                created_at: row.get(3)?, updated_at: row.get(4)?, status: row.get(5)?,
+                file_path: row.get(6).unwrap_or(None), transcript: row.get(7).unwrap_or(None),
+                summary: row.get(8).unwrap_or(None), mind_map: row.get(9).unwrap_or(None),
+                template_id: row.get(10).unwrap_or(None), participants: row.get(11).unwrap_or(None),
+                tags: row.get(12).unwrap_or(None),
+            })
+        },
+    ).map_err(|e| format!("Session not found: {}", e))?;
+
+    let export_tmpl = conn.query_row(
+        "SELECT id, name, body FROM export_templates WHERE id = ?1",
+        [&template_id],
+        |row| Ok(ExportTemplate { id: row.get(0)?, name: row.get(1)?, body: row.get(2)? }),
+    ).map_err(|e| format!("Export template not found: {}", e))?;
+
+    let type_label = match session.session_type.as_str() {
+        "meeting" => "Meeting", "voice_note" => "Voice Note",
+        "lecture" => "Lecture", "import" => "Imported File", _ => &session.session_type,
+    };
+
+    let mut out = export_tmpl.body;
+    let replacements: [(&str, &str); 8] = [
+        ("title", &session.title),
+        ("type", type_label),
+        ("date", &session.created_at),
+        ("participants", session.participants.as_deref().unwrap_or("")),
+        ("tags", session.tags.as_deref().unwrap_or("")),
+        ("transcript", session.transcript.as_deref().unwrap_or("")),
+        ("summary", session.summary.as_deref().unwrap_or("")),
+        ("mind_map", session.mind_map.as_deref().unwrap_or("")),
+    ];
+    for (key, val) in &replacements {
+        out = out.replace(&format!("{{{}}}", key), val);
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+fn delete_session(state: State<'_, AppState>, session_id: i64) -> Result<(), String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+
+    // Get file path before deleting
+    let file_path: Option<String> = conn.query_row(
+        "SELECT file_path FROM sessions WHERE id = ?1", [&session_id],
+        |row| Ok(row.get(0).ok()),
+    ).unwrap_or(None).flatten();
+
+    conn.execute("DELETE FROM sessions WHERE id = ?1", [&session_id])
+        .map_err(|e| e.to_string())?;
+    db::rebuild_fts(conn);
+
+    // Delete audio file if exists
+    if let Some(path) = file_path {
+        let _ = fs::remove_file(&path);
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_audio_duration(path: String) -> Result<f64, String> {
+    use std::process::Command;
+    let output = Command::new("ffprobe")
+        .args(["-v", "quiet", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", &path])
+        .output()
+        .map_err(|e| format!("ffprobe not found: {}", e))?;
+    if !output.status.success() {
+        return Err("ffprobe failed to get duration".into());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.trim().parse::<f64>().map_err(|_| "Could not parse duration".into())
+}
+
+#[tauri::command]
+async fn rag_query(state: State<'_, AppState>, question: String, provider: String, api_key: String, model: String) -> Result<String, String> {
+    // Search relevant transcripts
+    let (results, ollama_url) = {
+        let db_guard = state.db.lock().unwrap();
+        let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+        let results = db::search_sessions(conn, &question);
+        let ollama_url = state.ollama_url.lock().unwrap().clone();
+        (results, ollama_url)
+    };
+
+    if results.is_empty() {
+        return Err("No relevant sessions found. Try a different question.".into());
+    }
+
+    // Build context from top results
+    let mut context = String::new();
+    for (i, session) in results.iter().take(5).enumerate() {
+        if let Some(ref t) = session.transcript {
+            context.push_str(&format!("--- Sessione {}: {} ---\n{}\n\n", i + 1, session.title, t));
+        }
+    }
+
+    llm::dispatch_rag_query(&provider, &api_key, &model, &question, &context, &ollama_url).await
+}
+
+#[tauri::command]
+fn backup_database(app: AppHandle, dest_path: String) -> Result<(), String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let db_path = app_data_dir.join("postilla.db");
+    fs::copy(&db_path, &dest_path).map_err(|e| format!("Failed to backup database: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn restore_database(app: AppHandle, state: State<'_, AppState>, source_path: String) -> Result<(), String> {
+    let data = fs::read(&source_path).map_err(|e| format!("Cannot read backup file: {}", e))?;
+    if data.len() < 16 || &data[0..16] != b"SQLite format 3\0" {
+        return Err("Not a valid SQLite database file".into());
+    }
+
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let db_path = app_data_dir.join("postilla.db");
+
+    let mut db_guard = state.db.lock().unwrap();
+    *db_guard = None;
+    fs::copy(&source_path, &db_path).map_err(|e| format!("Failed to restore database: {}", e))?;
+    let conn = init_db(&app_data_dir).map_err(|e| format!("Failed to re-initialize database: {}", e))?;
+    *db_guard = Some(conn);
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn annotate_speakers(state: State<'_, AppState>, session_id: i64, provider: String, api_key: String, model: String) -> Result<String, String> {
+    let (transcript, participants) = {
+        let db_guard = state.db.lock().unwrap();
+        let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+        let mut stmt = conn.prepare("SELECT transcript, participants FROM sessions WHERE id = ?1").unwrap();
+        stmt.query_row([&session_id], |row| {
+            let t: Option<String> = row.get(0).unwrap_or(None);
+            let p: Option<String> = row.get(1).unwrap_or(None);
+            Ok((t, p))
+        }).map_err(|e| format!("Session not found: {}", e))?
+    };
+
+    let transcript = transcript.ok_or("No transcript found. Transcribe the session first.")?;
+    let participants = participants.unwrap_or_default();
+    if participants.trim().is_empty() {
+        return Err("No participants set. Add participants first.".into());
+    }
+
+    let ollama_url = state.ollama_url.lock().unwrap().clone();
+    let annotated = llm::dispatch_annotate_speakers(&provider, &api_key, &model, &transcript, &participants, &ollama_url).await?;
+
+    // Save annotated transcript back
+    {
+        let db_guard = state.db.lock().unwrap();
+        let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+        conn.execute(
+            "UPDATE sessions SET transcript = ?1 WHERE id = ?2",
+            (&annotated, &session_id),
+        ).map_err(|e| e.to_string())?;
+        db::rebuild_fts(conn);
+    }
+
+    Ok(annotated)
+}
+
+#[derive(Serialize)]
+struct AudioData {
+    mime: String,
+    b64: String,
+}
+
+#[tauri::command]
+fn read_audio_file(path: String) -> Result<AudioData, String> {
+    use base64::Engine;
+    let data = fs::read(&path).map_err(|e| format!("Failed to read audio file: {}", e))?;
+
+    let mime = if data.len() > 4 {
+        let header: [u8; 4] = [data[0], data[1], data[2], data[3]];
+        match header {
+            [0x52, 0x49, 0x46, 0x46] => "audio/wav",
+            [0x4F, 0x67, 0x67, 0x53] => "audio/ogg",
+            [0x66, 0x4C, 0x61, 0x43] => "audio/flac",
+            [0x49, 0x44, 0x33, _]    => "audio/mpeg",
+            [0xFF, 0xFB, _, _]       => "audio/mpeg",
+            [0x00, 0x00, 0x00, 0x20] => "audio/mp4",
+            [0x1A, 0x45, 0xDF, 0xA3] => "audio/webm",
+            _ => {
+                let ext = path.rsplit('.').next().unwrap_or("webm").to_lowercase();
+                match ext.as_str() {
+                    "ogg" => "audio/ogg",
+                    "m4a" | "mp4" => "audio/mp4",
+                    "wav" => "audio/wav",
+                    "mp3" => "audio/mpeg",
+                    _ => "audio/webm",
+                }
+            }
+        }
+    } else {
+        "audio/webm"
+    };
+
+    Ok(AudioData { mime: mime.to_string(), b64: base64::engine::general_purpose::STANDARD.encode(&data) })
+}
+
+#[tauri::command]
+fn search_sessions(state: State<'_, AppState>, query: String) -> Result<Vec<Session>, String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    Ok(db::search_sessions(conn, &query))
+}
+
+#[tauri::command]
+fn export_session_markdown(state: State<'_, AppState>, session_id: i64) -> Result<String, String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+
+    let session: Session = conn.query_row(
+        "SELECT id, session_type, title, created_at, updated_at, status, file_path, transcript, summary, mind_map, template_id, participants, tags FROM sessions WHERE id = ?1",
+        [&session_id],
+        |row| {
+            Ok(Session {
+                id: row.get(0)?,
+                session_type: row.get(1)?,
+                title: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+                status: row.get(5)?,
+                file_path: row.get(6).unwrap_or(None),
+                transcript: row.get(7).unwrap_or(None),
+                summary: row.get(8).unwrap_or(None),
+                mind_map: row.get(9).unwrap_or(None),
+                template_id: row.get(10).unwrap_or(None),
+                participants: row.get(11).unwrap_or(None),
+                tags: row.get(12).unwrap_or(None),
+            })
+        },
+    ).map_err(|e| format!("Session not found: {}", e))?;
+
+    let type_label = match session.session_type.as_str() {
+        "meeting" => "Meeting",
+        "voice_note" => "Voice Note",
+        "lecture" => "Lecture",
+        "import" => "Imported File",
+        _ => &session.session_type,
+    };
+
+    let mut md = String::new();
+    md.push_str(&format!("# {}\n\n", session.title));
+    md.push_str(&format!("- **Type:** {}\n", type_label));
+    md.push_str(&format!("- **Date:** {}\n", session.created_at));
+    if let Some(ref p) = session.participants {
+        if !p.is_empty() {
+            md.push_str(&format!("- **Participants:** {}\n", p));
+        }
+    }
+    if let Some(ref t) = session.tags {
+        if !t.is_empty() {
+            md.push_str(&format!("- **Tags:** {}\n", t));
+        }
+    }
+    md.push_str("\n---\n\n");
+
+    if let Some(ref t) = session.transcript {
+        md.push_str("## Transcript\n\n");
+        // Strip ** markers for clean markdown — keep as bold
+        let clean = t.replace("**", "**");
+        md.push_str(&clean);
+        md.push_str("\n\n---\n\n");
+    }
+
+    if let Some(ref s) = session.summary {
+        md.push_str("## Summary\n\n");
+        md.push_str(s);
+        md.push_str("\n\n---\n\n");
+    }
+
+    if let Some(ref m) = session.mind_map {
+        md.push_str("## Mind Map\n\n");
+        md.push_str(m);
+        md.push_str("\n\n");
+    }
+
+    md.push_str("\n---\n*Exported from Postilla*\n");
+    Ok(md)
+}
+
+#[tauri::command]
+async fn get_remote_models(provider: String, api_key: String) -> Result<Vec<String>, String> {
+    match provider.as_str() {
+        "openai" => remote_llm::openai_list_models(&api_key).await,
+        "anthropic" => remote_llm::anthropic_list_models(&api_key).await,
+        _ => Err(format!("Unknown provider: {}", provider)),
+    }
+}
+
+#[tauri::command]
+async fn validate_api_key(provider: String, api_key: String) -> Result<bool, String> {
+    match provider.as_str() {
+        "openai" => {
+            match remote_llm::openai_list_models(&api_key).await {
+                Ok(_) => Ok(true),
+                Err(_e) => Ok(false), // Don't leak error details
+            }
+        }
+        "anthropic" => {
+            match remote_llm::anthropic_list_models(&api_key).await {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            }
+        }
+        _ => Err(format!("Unknown provider: {}", provider)),
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -219,7 +823,6 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -229,6 +832,7 @@ pub fn run() {
             
             app.manage(AppState {
                 db: Mutex::new(Some(conn)),
+                ollama_url: Mutex::new("http://localhost:11434".to_string()),
             });
 
             #[cfg(target_os = "linux")]
@@ -251,7 +855,21 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_sessions, create_session, import_audio, save_audio_recording, transcribe_session, summarize_session, get_ollama_models, get_device_id, verify_license])
+        .invoke_handler(tauri::generate_handler![
+            get_sessions, create_session, import_audio, save_audio_recording,
+            transcribe_session, summarize_session, get_ollama_models,
+            get_device_id, verify_license,
+            update_session_type, update_session_title,
+            generate_session_title, generate_mind_map,
+            get_templates, save_template, delete_template,
+            read_audio_file, get_remote_models, validate_api_key,
+            discover_ollama, set_ollama_url, update_session_participants, annotate_speakers,
+            export_session_markdown, search_sessions,
+            update_session_transcript, update_session_summary, update_session_tags,
+            backup_database, restore_database,
+            get_export_templates, save_export_template, delete_export_template, export_session_with_template,
+            rag_query, delete_session, get_audio_duration,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

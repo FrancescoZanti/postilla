@@ -8,6 +8,10 @@
   "permissions": [
     "core:default",
     "opener:default",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "$APPDATA/**" }]
+    },
     "dialog:default",
     "os:default",
     "fs:default",
@@ -17,6 +21,7 @@
     "fs:allow-appdata-read",
     "fs:allow-appdata-write-recursive",
     "fs:allow-appdata-read-recursive",
-    "fs:allow-mkdir"
+    "fs:allow-mkdir",
+    "fs:allow-write-text-file"
   ]
 }
