@@ -2,13 +2,18 @@ name: Build & Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       version:
         description: 'Version to build (e.g. 0.3.0)'
-        required: true
+        required: false
 
 env:
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
@@ -20,13 +25,19 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
+      is_release: ${{ steps.version.outputs.IS_RELEASE }}
     steps:
       - id: version
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
             echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-          else
+            echo "IS_RELEASE=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+            echo "IS_RELEASE=true" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=ci-$(date +%Y%m%d%H%M%S)" >> $GITHUB_OUTPUT
+            echo "IS_RELEASE=false" >> $GITHUB_OUTPUT
           fi
 
   # ────────────────────────────────────────────────────────
@@ -106,6 +117,37 @@ jobs:
           if-no-files-found: warn
 
   # ────────────────────────────────────────────────────────
+  # macOS (.dmg)
+  # ────────────────────────────────────────────────────────
+  build-macos:
+    needs: get-version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: npm run tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: src-tauri/target/release/bundle/**/*
+          if-no-files-found: warn
+
+  # ────────────────────────────────────────────────────────
   # Fedora (.rpm)
   # ────────────────────────────────────────────────────────
   build-fedora:
@@ -150,10 +192,11 @@ jobs:
           if-no-files-found: warn
 
   # ────────────────────────────────────────────────────────
-  # Publish to Keygen.sh Releases
+  # Publish to Keygen.sh Releases (solo per release)
   # ────────────────────────────────────────────────────────
   publish-keygen:
-    needs: [get-version, build-ubuntu, build-windows, build-fedora]
+    if: needs.get-version.outputs.is_release == 'true'
+    needs: [get-version, build-ubuntu, build-windows, build-macos, build-fedora]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -224,6 +267,7 @@ jobs:
           for f in *.AppImage; do [ -f "$f" ] && upload_artifact "$f" "linux-appimage" "amd64"; done
           for f in *.msi; do [ -f "$f" ] && upload_artifact "$f" "windows-msi" "x86_64"; done
           for f in *.exe; do [ -f "$f" ] && upload_artifact "$f" "windows-exe" "x86_64"; done
+          for f in *.dmg; do [ -f "$f" ] && upload_artifact "$f" "macos-dmg" "aarch64"; done
           for f in *.tar.gz *.tgz; do [ -f "$f" ] && upload_artifact "$f" "updater" "amd64"; done
           for f in *.zip; do [ -f "$f" ] && upload_artifact "$f" "updater" "x86_64"; done
           for f in *.sig; do [ -f "$f" ] && upload_artifact "$f" "signature" "amd64"; done
