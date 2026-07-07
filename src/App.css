@@ -1323,6 +1323,54 @@ body, html, #root {
   white-space: pre-wrap;
 }
 
+/* ── Playback Speed ── */
+.playback-speed {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  margin-left: 0.5rem;
+}
+.speed-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.65rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all 0.15s;
+}
+.speed-btn:hover { background: var(--bg-hover); }
+.speed-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* ── Stat Boxes ── */
+.stat-box {
+  background: var(--bg-card);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem;
+  text-align: center;
+  border: 1px solid var(--border);
+}
+.stat-box strong {
+  display: block;
+  font-size: 1.5rem;
+  color: var(--accent);
+  line-height: 1.2;
+}
+.stat-box span {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  margin-top: 0.15rem;
+}
+
+/* ── Search Filters ── */
+.search-filter-label {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  padding: 0.25rem 0.5rem;
+}
+
 /* ── Collapsible Sections ── */
 .collapse-toggle {
   cursor: pointer;

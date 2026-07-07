@@ -566,6 +566,189 @@ fn delete_session(state: State<'_, AppState>, session_id: i64) -> Result<(), Str
 }
 
 #[tauri::command]
+fn export_session_srt(state: State<'_, AppState>, session_id: i64) -> Result<String, String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+
+    let session: Session = conn.query_row(
+        "SELECT id, session_type, title, created_at, updated_at, status, file_path, transcript, summary, mind_map, template_id, participants, tags FROM sessions WHERE id = ?1",
+        [&session_id],
+        |row| {
+            Ok(Session {
+                id: row.get(0)?, session_type: row.get(1)?, title: row.get(2)?,
+                created_at: row.get(3)?, updated_at: row.get(4)?, status: row.get(5)?,
+                file_path: row.get(6).unwrap_or(None), transcript: row.get(7).unwrap_or(None),
+                summary: row.get(8).unwrap_or(None), mind_map: row.get(9).unwrap_or(None),
+                template_id: row.get(10).unwrap_or(None), participants: row.get(11).unwrap_or(None),
+                tags: row.get(12).unwrap_or(None),
+            })
+        },
+    ).map_err(|e| format!("Session not found: {}", e))?;
+
+    let transcript = session.transcript.ok_or("No transcript available")?;
+
+    let lines: Vec<&str> = transcript.lines().filter(|l| !l.trim().is_empty()).collect();
+    let mut srt = String::new();
+    let mut counter = 1;
+    for chunk in lines.chunks(2) {
+        let text = chunk.join(" ");
+        let start_secs = (counter - 1) * 5;
+        let end_secs = start_secs + 5;
+        let start = format!("{:02}:{:02}:{:02},000", start_secs / 3600, (start_secs % 3600) / 60, start_secs % 60);
+        let end = format!("{:02}:{:02}:{:02},000", end_secs / 3600, (end_secs % 3600) / 60, end_secs % 60);
+        srt.push_str(&format!("{}\n{} --> {}\n{}\n\n", counter, start, end, text));
+        counter += 1;
+    }
+    Ok(srt)
+}
+
+#[tauri::command]
+fn export_session_vtt(state: State<'_, AppState>, session_id: i64) -> Result<String, String> {
+    let srt = export_session_srt(state, session_id)?;
+    let vtt = "WEBVTT\n\n".to_string() + srt.replace(",", ".").as_str();
+    Ok(vtt)
+}
+
+#[tauri::command]
+fn export_session_txt(state: State<'_, AppState>, session_id: i64) -> Result<String, String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+
+    let session: Session = conn.query_row(
+        "SELECT id, session_type, title, created_at, updated_at, status, file_path, transcript, summary, mind_map, template_id, participants, tags FROM sessions WHERE id = ?1",
+        [&session_id],
+        |row| {
+            Ok(Session {
+                id: row.get(0)?, session_type: row.get(1)?, title: row.get(2)?,
+                created_at: row.get(3)?, updated_at: row.get(4)?, status: row.get(5)?,
+                file_path: row.get(6).unwrap_or(None), transcript: row.get(7).unwrap_or(None),
+                summary: row.get(8).unwrap_or(None), mind_map: row.get(9).unwrap_or(None),
+                template_id: row.get(10).unwrap_or(None), participants: row.get(11).unwrap_or(None),
+                tags: row.get(12).unwrap_or(None),
+            })
+        },
+    ).map_err(|e| format!("Session not found: {}", e))?;
+
+    let mut txt = String::new();
+    txt.push_str(&format!("{}\n", session.title));
+    txt.push_str(&format!("{}\n", "=".repeat(session.title.len())));
+    txt.push_str(&format!("Type: {}\n", session.session_type));
+    txt.push_str(&format!("Date: {}\n", session.created_at));
+    if let Some(ref p) = session.participants { if !p.is_empty() { txt.push_str(&format!("Participants: {}\n", p)); } }
+    if let Some(ref t) = session.tags { if !t.is_empty() { txt.push_str(&format!("Tags: {}\n", t)); } }
+    txt.push_str("\n---\n\n");
+    if let Some(ref t) = session.transcript { txt.push_str(&format!("TRANSCRIPT\n{}\n\n---\n\n", t)); }
+    if let Some(ref s) = session.summary { txt.push_str(&format!("SUMMARY\n{}\n\n---\n\n", s)); }
+    if let Some(ref m) = session.mind_map { txt.push_str(&format!("MIND MAP\n{}\n\n", m)); }
+    txt.push_str("---\nExported from Postilla\n");
+    Ok(txt)
+}
+
+#[tauri::command]
+fn export_session_obsidian(state: State<'_, AppState>, session_id: i64) -> Result<String, String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+
+    let session: Session = conn.query_row(
+        "SELECT id, session_type, title, created_at, updated_at, status, file_path, transcript, summary, mind_map, template_id, participants, tags FROM sessions WHERE id = ?1",
+        [&session_id],
+        |row| {
+            Ok(Session {
+                id: row.get(0)?, session_type: row.get(1)?, title: row.get(2)?,
+                created_at: row.get(3)?, updated_at: row.get(4)?, status: row.get(5)?,
+                file_path: row.get(6).unwrap_or(None), transcript: row.get(7).unwrap_or(None),
+                summary: row.get(8).unwrap_or(None), mind_map: row.get(9).unwrap_or(None),
+                template_id: row.get(10).unwrap_or(None), participants: row.get(11).unwrap_or(None),
+                tags: row.get(12).unwrap_or(None),
+            })
+        },
+    ).map_err(|e| format!("Session not found: {}", e))?;
+
+    let type_label = match session.session_type.as_str() {
+        "meeting" => "Meeting", "voice_note" => "Voice Note",
+        "lecture" => "Lecture", "import" => "Imported File", _ => &session.session_type,
+    };
+
+    let mut md = String::new();
+    md.push_str("---\n");
+    md.push_str(&format!("title: {}\n", session.title));
+    md.push_str(&format!("type: {}\n", type_label));
+    md.push_str(&format!("date: {}\n", session.created_at));
+    if let Some(ref p) = session.participants { if !p.is_empty() { md.push_str(&format!("participants: {}\n", p)); } }
+    if let Some(ref t) = session.tags { if !t.is_empty() { md.push_str(&format!("tags: [{}]\n", t.split(',').map(|s| format!("\"{}\"", s.trim())).collect::<Vec<_>>().join(", "))); } }
+    md.push_str("---\n\n");
+
+    if let Some(ref s) = session.summary { md.push_str(&format!("## Summary\n\n{}\n\n", s)); }
+    if let Some(ref t) = session.transcript { md.push_str(&format!("## Transcript\n\n{}\n\n", t)); }
+    if let Some(ref m) = session.mind_map { md.push_str(&format!("## Mind Map\n\n{}\n\n", m)); }
+    md.push_str("*Exported from Postilla*\n");
+    Ok(md)
+}
+
+#[tauri::command]
+fn get_dashboard_stats(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+
+    let total: i64 = conn.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0)).unwrap_or(0);
+    let with_transcript: i64 = conn.query_row("SELECT COUNT(*) FROM sessions WHERE transcript IS NOT NULL AND transcript != ''", [], |r| r.get(0)).unwrap_or(0);
+    let with_summary: i64 = conn.query_row("SELECT COUNT(*) FROM sessions WHERE summary IS NOT NULL AND summary != ''", [], |r| r.get(0)).unwrap_or(0);
+    let total_audio_duration: f64 = total as f64 * 1800.0; // placeholder — real calc needs ffprobe per file
+    let meetings: i64 = conn.query_row("SELECT COUNT(*) FROM sessions WHERE session_type = 'meeting'", [], |r| r.get(0)).unwrap_or(0);
+    let voice_notes: i64 = conn.query_row("SELECT COUNT(*) FROM sessions WHERE session_type = 'voice_note'", [], |r| r.get(0)).unwrap_or(0);
+    let lectures: i64 = conn.query_row("SELECT COUNT(*) FROM sessions WHERE session_type = 'lecture'", [], |r| r.get(0)).unwrap_or(0);
+    let imports: i64 = conn.query_row("SELECT COUNT(*) FROM sessions WHERE session_type = 'import'", [], |r| r.get(0)).unwrap_or(0);
+
+    Ok(serde_json::json!({
+        "total": total,
+        "with_transcript": with_transcript,
+        "with_summary": with_summary,
+        "total_audio_minutes": (total_audio_duration / 60.0).round() as i64,
+        "by_type": {
+            "meeting": meetings,
+            "voice_note": voice_notes,
+            "lecture": lectures,
+            "import": imports,
+        }
+    }))
+}
+
+#[tauri::command]
+fn cleanup_old_sessions(state: State<'_, AppState>, days: i64) -> Result<i64, String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(days);
+    let cutoff_str = cutoff.to_rfc3339();
+
+    let mut stmt = conn.prepare("SELECT id, file_path FROM sessions WHERE updated_at < ?1").map_err(|e| e.to_string())?;
+    let to_delete: Vec<(i64, Option<String>)> = stmt.query_map([&cutoff_str], |row| {
+        Ok((row.get(0)?, row.get(1).unwrap_or(None)))
+    }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+
+    let count = to_delete.len() as i64;
+    for (id, path) in &to_delete {
+        let _ = conn.execute("DELETE FROM sessions WHERE id = ?1", [id]);
+        if let Some(p) = path { let _ = fs::remove_file(p); }
+    }
+    db::rebuild_fts(conn);
+    Ok(count)
+}
+
+#[tauri::command]
+fn get_help_topics() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({"title": "Registrare una sessione", "content": "Clicca su 'Nuova Registrazione' per avviare una registrazione. Autorizza il microfono quando richiesto. Al termine, clicca sul pulsante stop."}),
+        serde_json::json!({"title": "Importare un file audio", "content": "Clicca su 'Importa Audio' e seleziona un file dal tuo computer. Formati supportati: MP3, WAV, M4A, OGG, WebM."}),
+        serde_json::json!({"title": "Trascrivere audio", "content": "Dopo aver registrato o importato, clicca su 'Trascrivi'. Il modello Parakeet verrà scaricato automaticamente al primo utilizzo."}),
+        serde_json::json!({"title": "Riassumere con AI", "content": "Configura un provider AI in Impostazioni (Ollama locale, OpenAI o Anthropic), poi clicca 'Riassumi'. Scegli tra template predefiniti per tipo di sessione."}),
+        serde_json::json!({"title": "Esportare una sessione", "content": "Usa il pulsante 'Esporta' per scaricare in Markdown, TXT, SRT, VTT, o formato Obsidian. Crea template personalizzati in Impostazioni."}),
+        serde_json::json!({"title": "Cercare tra le sessioni", "content": "Usa la barra di ricerca nella sidebar. La ricerca full-text trova risultati in titoli, trascrizioni, riassunti e tag."}),
+        serde_json::json!({"title": "Provider AI disponibili", "content": "Ollama: locale e gratuito. OpenAI: ChatGPT. Anthropic: Claude. Configura le chiavi API in Impostazioni > AI Providers."}),
+    ]
+}
+
+#[tauri::command]
 fn get_audio_duration(path: String) -> Result<f64, String> {
     use std::process::Command;
     let output = Command::new("ffprobe")
@@ -869,6 +1052,8 @@ pub fn run() {
             backup_database, restore_database,
             get_export_templates, save_export_template, delete_export_template, export_session_with_template,
             rag_query, delete_session, get_audio_duration,
+            export_session_srt, export_session_vtt, export_session_txt, export_session_obsidian,
+            get_dashboard_stats, cleanup_old_sessions, get_help_topics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

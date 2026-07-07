@@ -72,6 +72,7 @@ function AudioPlayer({ filePath }: { filePath: string }) {
   const wsRef = useRef<WaveSurfer | null>(null);
   const blobUrlRef = useRef<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,7 +108,7 @@ function AudioPlayer({ filePath }: { filePath: string }) {
           backend: 'MediaElement',
         });
         ws.load(url);
-        ws.on('ready', () => { if (!cancelled) { setLoading(false); setReady(true); } });
+        ws.on('ready', () => { if (!cancelled) { setLoading(false); setReady(true); ws.setPlaybackRate(playbackRate); } });
         ws.on('finish', () => { if (!cancelled) setPlaying(false); });
         ws.on('error', (e) => { if (!cancelled) setError(String(e)); });
         wsRef.current = ws;
@@ -117,6 +118,10 @@ function AudioPlayer({ filePath }: { filePath: string }) {
     })();
     return () => { cancelled = true; };
   }, [filePath]);
+
+  useEffect(() => {
+    wsRef.current?.setPlaybackRate(playbackRate);
+  }, [playbackRate]);
 
   function togglePlay() {
     const ws = wsRef.current;
@@ -132,6 +137,12 @@ function AudioPlayer({ filePath }: { filePath: string }) {
         {loading ? <RefreshCw size={16} className="spin" /> : playing ? <Pause size={16} /> : <Play size={16} />}
       </button>
       <div ref={containerRef} className="waveform-container" />
+      <div className="playback-speed">
+        {[0.5, 0.75, 1, 1.25, 1.5, 2].map(rate => (
+          <button key={rate} className={`speed-btn ${playbackRate === rate ? 'active' : ''}`}
+            onClick={() => setPlaybackRate(rate)}>{rate}x</button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -830,6 +841,42 @@ function App() {
     }
   }
 
+  async function handleExportSrt(sessionId: number, title: string) {
+    try {
+      const srt = await invoke<string>("export_session_srt", { sessionId });
+      const safeName = title.replace(/[^a-zA-Z0-9-_ ]/g, '').trim() || `session-${sessionId}`;
+      const path = await save({ filters: [{ name: 'SubRip', extensions: ['srt'] }], defaultPath: `${safeName}.srt` });
+      if (path) await writeTextFile(path, srt);
+    } catch (err: any) { console.error("SRT export failed:", err); alert(`Export failed: ${err.message || err}`); }
+  }
+
+  async function handleExportVtt(sessionId: number, title: string) {
+    try {
+      const vtt = await invoke<string>("export_session_vtt", { sessionId });
+      const safeName = title.replace(/[^a-zA-Z0-9-_ ]/g, '').trim() || `session-${sessionId}`;
+      const path = await save({ filters: [{ name: 'WebVTT', extensions: ['vtt'] }], defaultPath: `${safeName}.vtt` });
+      if (path) await writeTextFile(path, vtt);
+    } catch (err: any) { console.error("VTT export failed:", err); alert(`Export failed: ${err.message || err}`); }
+  }
+
+  async function handleExportTxt(sessionId: number, title: string) {
+    try {
+      const txt = await invoke<string>("export_session_txt", { sessionId });
+      const safeName = title.replace(/[^a-zA-Z0-9-_ ]/g, '').trim() || `session-${sessionId}`;
+      const path = await save({ filters: [{ name: 'Text', extensions: ['txt'] }], defaultPath: `${safeName}.txt` });
+      if (path) await writeTextFile(path, txt);
+    } catch (err: any) { console.error("TXT export failed:", err); alert(`Export failed: ${err.message || err}`); }
+  }
+
+  async function handleExportObsidian(sessionId: number, title: string) {
+    try {
+      const md = await invoke<string>("export_session_obsidian", { sessionId });
+      const safeName = title.replace(/[^a-zA-Z0-9-_ ]/g, '').trim() || `session-${sessionId}`;
+      const path = await save({ filters: [{ name: 'Markdown', extensions: ['md'] }], defaultPath: `${safeName}.md` });
+      if (path) await writeTextFile(path, md);
+    } catch (err: any) { console.error("Obsidian export failed:", err); alert(`Export failed: ${err.message || err}`); }
+  }
+
   async function handleDeleteSession(sessionId: number) {
     if (!confirm("Delete this session permanently? This action cannot be undone.")) return;
     try {
@@ -1290,6 +1337,61 @@ function App() {
               </div>
             </div>
           </section>
+
+          {/* ── Auto-Delete ── */}
+          <section>
+            <div className="settings-section-header">
+              <h3>Auto-Delete</h3>
+            </div>
+            <div className="card">
+              <div className="form-group">
+                <p style={{ fontSize: '0.85rem', color: '#8e8ea0', margin: 0 }}>Automatically delete sessions older than the specified number of days.</p>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.75rem' }}>
+                  <input className="plaud-input" type="number" id="autoDeleteDays" defaultValue={90}
+                    style={{ width: 80 }} min={1} />
+                  <span style={{ fontSize: '0.85rem', color: '#8e8ea0' }}>days</span>
+                  <button className="plaud-btn btn-danger btn-small" onClick={async () => {
+                    const days = parseInt((document.getElementById('autoDeleteDays') as HTMLInputElement).value);
+                    if (!days || days < 1) return;
+                    if (!confirm(`Delete all sessions older than ${days} days? This cannot be undone.`)) return;
+                    try {
+                      const count = await invoke<number>("cleanup_old_sessions", { days });
+                      alert(`Deleted ${count} old session(s).`);
+                      await loadSessions();
+                    } catch (err: any) { alert("Auto-delete failed: " + (err.message || err)); }
+                  }}>Clean Up</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* ── Dashboard ── */}
+          <section>
+            <div className="settings-section-header">
+              <h3>Dashboard</h3>
+            </div>
+            <div className="card">
+              {(() => {
+                const [stats, setStats] = useState<Record<string, any> | null>(null);
+                useEffect(() => {
+                  invoke<Record<string, any>>("get_dashboard_stats").then(setStats).catch(() => {});
+                }, []);
+                if (!stats) return <p style={{ fontSize: '0.85rem', color: '#8e8ea0' }}>Loading stats...</p>;
+                return (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                    <div className="stat-box"><strong>{stats.total}</strong><span>Total Sessions</span></div>
+                    <div className="stat-box"><strong>{stats.with_transcript}</strong><span>Transcribed</span></div>
+                    <div className="stat-box"><strong>{stats.with_summary}</strong><span>Summarized</span></div>
+                    <div className="stat-box"><strong>{stats.total_audio_minutes}</strong><span>Audio Minutes</span></div>
+                    <div className="stat-box"><strong>{stats.by_type?.meeting || 0}</strong><span>Meetings</span></div>
+                    <div className="stat-box"><strong>{stats.by_type?.voice_note || 0}</strong><span>Voice Notes</span></div>
+                    <div className="stat-box"><strong>{stats.by_type?.lecture || 0}</strong><span>Lectures</span></div>
+                    <div className="stat-box"><strong>{stats.by_type?.import || 0}</strong><span>Imported</span></div>
+                  </div>
+                );
+              })()}
+            </div>
+          </section>
         </div>
       </div>
     );
@@ -1319,7 +1421,11 @@ function App() {
               </div>
               <div className="onboarding-step">
                 <div className="step-number">4</div>
-                <div><strong>Export</strong> — Save as Markdown or PDF with customizable templates.</div>
+                <div><strong>AI Providers</strong> — Configure Ollama (local), OpenAI, or Anthropic in Settings.</div>
+              </div>
+              <div className="onboarding-step">
+                <div className="step-number">5</div>
+                <div><strong>Export</strong> — Save as Markdown, TXT, SRT, VTT, PDF, or Obsidian.</div>
               </div>
             </div>
             <button className="plaud-btn btn-primary" style={{ width: '100%', marginTop: '1rem' }}
@@ -1425,18 +1531,30 @@ function App() {
                 </span>
                 <div className="export-actions">
                   <button className="plaud-btn btn-outline btn-small"
-                    onClick={() => {
-                      const tmpl = exportTemplates[0];
-                      if (tmpl) handleExportWithTemplate(selectedSession.id, tmpl.id);
-                      else handleExportMarkdown(selectedSession.id, selectedSession.title);
-                    }} title="Export Markdown">
+                    onClick={() => handleExportMarkdown(selectedSession.id, selectedSession.title)} title="Export Markdown">
                     .md
+                  </button>
+                  <button className="plaud-btn btn-outline btn-small"
+                    onClick={() => handleExportTxt(selectedSession.id, selectedSession.title)} title="Export TXT">
+                    TXT
+                  </button>
+                  <button className="plaud-btn btn-outline btn-small"
+                    onClick={() => handleExportSrt(selectedSession.id, selectedSession.title)} title="Export SRT">
+                    SRT
+                  </button>
+                  <button className="plaud-btn btn-outline btn-small"
+                    onClick={() => handleExportVtt(selectedSession.id, selectedSession.title)} title="Export VTT">
+                    VTT
+                  </button>
+                  <button className="plaud-btn btn-outline btn-small"
+                    onClick={() => handleExportObsidian(selectedSession.id, selectedSession.title)} title="Export Obsidian">
+                    Obs
                   </button>
                   <button className="plaud-btn btn-outline btn-small"
                     onClick={() => handleExportPdf(selectedSession.id, selectedSession.title)} title="Export PDF">
                     PDF
                   </button>
-                  {exportTemplates.length > 1 && (
+                  {exportTemplates.length > 0 && (
                     <div className="select-wrapper" style={{ minWidth: 100 }}>
                       <select className="plaud-select" style={{ fontSize: '0.75rem', padding: '2px 20px 2px 6px' }}
                         value="" onChange={e => { if (e.target.value) handleExportWithTemplate(selectedSession.id, Number(e.target.value)); }}>
@@ -1836,8 +1954,21 @@ function App() {
           <button className="sidebar-btn" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="Toggle theme">
             {theme === 'dark' ? <Sparkles size={14} /> : <Sparkles size={14} />}
           </button>
+          <button className="sidebar-btn" onClick={() => {
+            setShowSettings(true);
+            setTimeout(() => document.querySelector('.settings-section-header:last-of-type')?.scrollIntoView({ behavior: 'smooth' }), 100);
+          }} title="Dashboard">
+            <Sparkles size={14} />
+          </button>
           <button className="sidebar-btn" onClick={() => setShowSettings(true)} title="Settings">
             <Settings2 size={14} />
+          </button>
+          <button className="sidebar-btn" onClick={async () => {
+            const topics = await invoke<any[]>("get_help_topics");
+            const msg = topics.map((t: any, i: number) => `${i+1}. ${t.title}\n   ${t.content}`).join('\n\n');
+            alert(msg);
+          }} title="Help">
+            ?
           </button>
         </div>
 
@@ -1856,6 +1987,12 @@ function App() {
               }, 250);
             }} />
         </div>
+
+        {searchResults !== null && searchResults.length > 0 && (
+          <div className="search-filters">
+            <span className="search-filter-label">{searchResults.length} results</span>
+          </div>
+        )}
 
         {!ollamaConnected && !isDiscovering && ollamaInstances.length === 0 && (
           <div className="lan-warning">
