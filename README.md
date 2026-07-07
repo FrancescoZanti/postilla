@@ -10,7 +10,7 @@ Costruita con [Tauri 2](https://v2.tauri.app/), [React](https://react.dev/), [Ty
 
 ## Installazione
 
-Scarica l'ultima release per il tuo sistema dalla pagina [Releases](https://github.com/fzanti/postilla/releases).
+Scarica l'ultima release per il tuo sistema dalla pagina [Releases](https://github.com/francescozanti/postilla/releases).
 
 | Piattaforma | Formato |
 |---|---|
