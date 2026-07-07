@@ -15,6 +15,9 @@ on:
         description: 'Version to build (e.g. 0.3.0)'
         required: false
 
+permissions:
+  contents: read
+
 env:
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
   KEYGEN_ACCOUNT_ID: bb57e8aa-625f-42d2-b5b2-b308796e872e
@@ -190,6 +193,39 @@ jobs:
           name: fedora
           path: src-tauri/target/release/bundle/**/*
           if-no-files-found: warn
+
+  # ────────────────────────────────────────────────────────
+  # Publish to GitHub Releases
+  # ────────────────────────────────────────────────────────
+  publish-github:
+    needs: [get-version, build-ubuntu, build-windows, build-macos, build-fedora]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*'
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.get-version.outputs.version }}
+          name: Postilla v${{ needs.get-version.outputs.version }}
+          files: |
+            *.deb
+            *.rpm
+            *.AppImage
+            *.msi
+            *.exe
+            *.dmg
+            *.tar.gz
+            *.tgz
+            *.zip
+            *.sig
+          fail_on_unmatched_files: false
+          generate_release_notes: true
 
   # ────────────────────────────────────────────────────────
   # Publish to Keygen.sh Releases (solo per release)
