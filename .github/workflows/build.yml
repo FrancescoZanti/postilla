@@ -18,6 +18,34 @@ on:
 permissions:
   contents: read
 
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - name: Install npm dependencies
+        run: npm ci
+      - name: Setup FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Run Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+      - name: Build frontend
+        run: npm run build
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: src-tauri/target/debug/*.log
+          if-no-files-found: ignore
+
 env:
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
   KEYGEN_ACCOUNT_ID: bb57e8aa-625f-42d2-b5b2-b308796e872e

@@ -1115,10 +1115,12 @@ function App() {
           <form onSubmit={handleActivateLicense}>
             <input type="text" className="plaud-input" placeholder="e.g. POSTILLA-PRO-123"
               value={licenseKey} onChange={e => setLicenseKey(e.target.value)}
-              autoFocus style={{ textAlign: 'center', letterSpacing: '2px', fontFamily: 'monospace' }} />
+              autoFocus style={{ textAlign: 'center', letterSpacing: '2px', fontFamily: 'monospace' }}
+              aria-label="License key" />
             {licenseError && <div className="error-text mt-1">{licenseError}</div>}
             <button type="submit" className="plaud-btn btn-primary"
-              disabled={isVerifying || !licenseKey} style={{ width: '100%', marginTop: '1.5rem' }}>
+              disabled={isVerifying || !licenseKey} style={{ width: '100%', marginTop: '1.5rem' }}
+              aria-label="Activate License">
               {isVerifying ? 'Verifying...' : 'Activate License'}
             </button>
           </form>
@@ -1137,7 +1139,8 @@ function App() {
         <div className="settings-view">
           <header className="settings-header">
             <h2>Settings</h2>
-            <button className="plaud-btn btn-outline btn-small" onClick={() => setShowSettings(false)}>
+            <button className="plaud-btn btn-outline btn-small" onClick={() => setShowSettings(false)}
+              aria-label="Close settings">
               <X size={16} /> Close
             </button>
           </header>
@@ -1154,7 +1157,7 @@ function App() {
                   <input className="plaud-input api-key-input" type="password"
                     placeholder="sk-..." value={openaiKey}
                     onChange={e => handleOpenaiKeyChange(e.target.value)}
-                    style={{ flex: 1 }} />
+                    style={{ flex: 1 }} aria-label="OpenAI API Key" />
                   {openaiKey && <span className="pill pill-green">Saved</span>}
                 </div>
               </div>
@@ -1164,7 +1167,7 @@ function App() {
                   <input className="plaud-input api-key-input" type="password"
                     placeholder="sk-ant-..." value={anthropicKey}
                     onChange={e => handleAnthropicKeyChange(e.target.value)}
-                    style={{ flex: 1 }} />
+                    style={{ flex: 1 }} aria-label="Anthropic API Key" />
                   {anthropicKey && <span className="pill pill-green">Saved</span>}
                 </div>
               </div>
@@ -1179,9 +1182,9 @@ function App() {
             <div className="card">
               <div className="form-group">
                 <label>AI Provider</label>
-                <div className="select-wrapper">
+                <div className="select-wrapper" data-tooltip="Choose which AI backend to use for summarization and analysis">
                   <select className="plaud-select" value={provider}
-                    onChange={e => handleProviderChange(e.target.value)}>
+                    onChange={e => handleProviderChange(e.target.value)} aria-label="AI Provider">
                     <option value="ollama">Ollama (Local)</option>
                     <option value="openai" disabled={!openaiKey}>OpenAI {!openaiKey && '(key not set)'}</option>
                     <option value="anthropic" disabled={!anthropicKey}>Anthropic {!anthropicKey && '(key not set)'}</option>
@@ -1193,7 +1196,7 @@ function App() {
                 <label>Model</label>
                 <div className="select-wrapper">
                   <select className="plaud-select" value={selectedLlm}
-                    onChange={e => setSelectedLlm(e.target.value)}>
+                    onChange={e => setSelectedLlm(e.target.value)} aria-label="AI Model">
                     {getModelOptions().length === 0 && <option value="">No models available</option>}
                     {getModelOptions().map(m => (
                       <option key={m.name} value={m.name}>{m.name} {m.recommended ? '⭐' : ''}</option>
@@ -1366,7 +1369,7 @@ function App() {
           </section>
 
           {/* ── Dashboard ── */}
-          <section>
+          <section id="dashboard-section">
             <div className="settings-section-header">
               <h3>Dashboard</h3>
             </div>
@@ -1432,18 +1435,40 @@ function App() {
               onClick={() => {
                 localStorage.setItem("postilla_onboarding_done", "1");
                 setShowOnboarding(false);
-              }}>
+              }} aria-label="Get started — close onboarding">
               Get Started
             </button>
           </div>
         </div>
       )}
       <main className="main-content">
+        <nav className="breadcrumb" aria-label="Breadcrumb">
+          <span className="breadcrumb-item active" onClick={() => { setSelectedSessionId(null); setCompareMode(false); }}
+            role="link" tabIndex={0} aria-label="Home">Home</span>
+          {compareMode && (
+            <>
+              <span className="breadcrumb-sep">›</span>
+              <span className="breadcrumb-item active">Compare</span>
+            </>
+          )}
+          {selectedSession && !compareMode && (
+            <>
+              <span className="breadcrumb-sep">›</span>
+              <span className="breadcrumb-item" onClick={() => setSelectedSessionId(null)}
+                role="link" tabIndex={0} aria-label="Back to sessions">
+                {SESSION_TYPE_LABELS[selectedSession.session_type] || selectedSession.session_type}
+              </span>
+              <span className="breadcrumb-sep">›</span>
+              <span className="breadcrumb-item active">{selectedSession.title}</span>
+            </>
+          )}
+        </nav>
         {compareMode ? (
           <div className="compare-view">
             <header className="compare-header">
               <h2>Compare Sessions</h2>
-              <button className="plaud-btn btn-outline btn-small" onClick={() => setCompareMode(false)}>
+              <button className="plaud-btn btn-outline btn-small" onClick={() => setCompareMode(false)}
+                aria-label="Close compare view">
                 <X size={16} /> Close
               </button>
             </header>
@@ -1517,7 +1542,8 @@ function App() {
                 <div className="select-wrapper" style={{ minWidth: 140 }}>
                   <select className="plaud-select"
                     value={selectedSession.session_type}
-                    onChange={e => handleChangeSessionType(selectedSession.id, e.target.value)}>
+                    onChange={e => handleChangeSessionType(selectedSession.id, e.target.value)}
+                    aria-label="Session type" data-tooltip="Change the session type">
                     {SESSION_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                   <ChevronDown className="select-icon" size={16} />
@@ -1529,35 +1555,42 @@ function App() {
                     hour: '2-digit', minute: '2-digit'
                   })}
                 </span>
-                <div className="export-actions">
+                <div className="export-actions" role="group" aria-label="Export actions">
                   <button className="plaud-btn btn-outline btn-small"
-                    onClick={() => handleExportMarkdown(selectedSession.id, selectedSession.title)} title="Export Markdown">
+                    onClick={() => handleExportMarkdown(selectedSession.id, selectedSession.title)}
+                    aria-label="Export as Markdown" data-tooltip="Export as Markdown">
                     .md
                   </button>
                   <button className="plaud-btn btn-outline btn-small"
-                    onClick={() => handleExportTxt(selectedSession.id, selectedSession.title)} title="Export TXT">
+                    onClick={() => handleExportTxt(selectedSession.id, selectedSession.title)}
+                    aria-label="Export as TXT" data-tooltip="Export as plain text">
                     TXT
                   </button>
                   <button className="plaud-btn btn-outline btn-small"
-                    onClick={() => handleExportSrt(selectedSession.id, selectedSession.title)} title="Export SRT">
+                    onClick={() => handleExportSrt(selectedSession.id, selectedSession.title)}
+                    aria-label="Export as SRT subtitles" data-tooltip="Export as SRT subtitles">
                     SRT
                   </button>
                   <button className="plaud-btn btn-outline btn-small"
-                    onClick={() => handleExportVtt(selectedSession.id, selectedSession.title)} title="Export VTT">
+                    onClick={() => handleExportVtt(selectedSession.id, selectedSession.title)}
+                    aria-label="Export as VTT subtitles" data-tooltip="Export as WebVTT subtitles">
                     VTT
                   </button>
                   <button className="plaud-btn btn-outline btn-small"
-                    onClick={() => handleExportObsidian(selectedSession.id, selectedSession.title)} title="Export Obsidian">
+                    onClick={() => handleExportObsidian(selectedSession.id, selectedSession.title)}
+                    aria-label="Export for Obsidian" data-tooltip="Export as Obsidian Markdown with frontmatter">
                     Obs
                   </button>
                   <button className="plaud-btn btn-outline btn-small"
-                    onClick={() => handleExportPdf(selectedSession.id, selectedSession.title)} title="Export PDF">
+                    onClick={() => handleExportPdf(selectedSession.id, selectedSession.title)}
+                    aria-label="Export as PDF" data-tooltip="Open print dialog for PDF">
                     PDF
                   </button>
                   {exportTemplates.length > 0 && (
                     <div className="select-wrapper" style={{ minWidth: 100 }}>
                       <select className="plaud-select" style={{ fontSize: '0.75rem', padding: '2px 20px 2px 6px' }}
-                        value="" onChange={e => { if (e.target.value) handleExportWithTemplate(selectedSession.id, Number(e.target.value)); }}>
+                        value="" onChange={e => { if (e.target.value) handleExportWithTemplate(selectedSession.id, Number(e.target.value)); }}
+                        aria-label="Export with template">
                         <option value="">Template...</option>
                         {exportTemplates.map(t => (
                           <option key={t.id} value={t.id}>{t.name}</option>
@@ -1566,7 +1599,8 @@ function App() {
                     </div>
                   )}
                   <button className="plaud-btn btn-danger btn-small"
-                    onClick={() => handleDeleteSession(selectedSession.id)} title="Delete session">
+                    onClick={() => handleDeleteSession(selectedSession.id)}
+                    aria-label="Delete session" data-tooltip="Permanently delete this session">
                     <X size={14} />
                   </button>
                 </div>
@@ -1583,15 +1617,18 @@ function App() {
                     <p>Start recording your voice or import an existing audio file.</p>
                     <div className="actions-center">
                       {recordingId === selectedSession.id ? (
-                        <button className="plaud-btn btn-danger active" onClick={stopRecording}>
+                        <button className="plaud-btn btn-danger active" onClick={stopRecording}
+                          aria-label="Stop recording" data-tooltip="Stop the current recording">
                           <MicOff size={18} /> Stop Recording
                         </button>
                       ) : (
-                        <button className="plaud-btn btn-primary" onClick={() => startRecording(selectedSession.id)} disabled={recordingId !== null}>
+                        <button className="plaud-btn btn-primary" onClick={() => startRecording(selectedSession.id)} disabled={recordingId !== null}
+                          aria-label="Record audio" data-tooltip="Start recording from your microphone">
                           <Mic size={18} /> Record Audio
                         </button>
                       )}
-                      <button className="plaud-btn btn-outline" onClick={() => handleImport(selectedSession.id)} disabled={recordingId !== null}>
+                      <button className="plaud-btn btn-outline" onClick={() => handleImport(selectedSession.id)} disabled={recordingId !== null}
+                        aria-label="Import audio file" data-tooltip="Import an existing audio file from your computer">
                         <FileAudio size={18} /> Import File
                       </button>
                     </div>
@@ -1614,12 +1651,13 @@ function App() {
 
                   {/* Participants input */}
                   {!selectedSession.transcript && (
-                    <div className="participants-section" style={{ marginTop: '0.75rem' }}>
+                      <div className="participants-section" style={{ marginTop: '0.75rem' }}>
                       <div className="participants-row">
                         <input className="plaud-input"
                           placeholder="Participants (e.g. Francesco, Giovanni)"
                           value={selectedSession.participants || ''}
                           onChange={e => handleUpdateParticipants(selectedSession.id, e.target.value)}
+                          aria-label="Session participants" data-tooltip="List participants separated by commas"
                         />
                       </div>
                     </div>
@@ -1632,6 +1670,7 @@ function App() {
                         placeholder="Tags (comma separated, e.g. design, sprint, urgent)"
                         value={selectedSession.tags || ''}
                         onChange={e => handleUpdateTags(selectedSession.id, e.target.value)}
+                        aria-label="Session tags" data-tooltip="Add tags separated by commas for easy filtering"
                       />
                     </div>
                   </div>
@@ -1641,7 +1680,8 @@ function App() {
                     <div className="transcribe-action" style={{ marginTop: '0.75rem' }}>
                       <div className="select-wrapper">
                         <Languages className="select-icon-left" size={16} />
-                        <select className="plaud-select lang-select" value={transcribeLang} onChange={e => setTranscribeLang(e.target.value)}>
+                        <select className="plaud-select lang-select" value={transcribeLang} onChange={e => setTranscribeLang(e.target.value)}
+                          aria-label="Transcription language" data-tooltip="Select the language of the audio for better accuracy">
                           <option value="auto">Auto-detect Language</option>
                           <option value="it">Italian (it)</option>
                           <option value="en">English (en)</option>
@@ -1653,7 +1693,8 @@ function App() {
                       </div>
                       <button className="plaud-btn btn-accent"
                         onClick={() => runAutoPipeline(selectedSession.id)}
-                        disabled={transcribingId !== null || summarizingId !== null || mindMappingId !== null}>
+                        disabled={transcribingId !== null || summarizingId !== null || mindMappingId !== null}
+                        aria-label="Run AI pipeline" data-tooltip="Automatically transcribe, summarize, and generate mind map">
                         {transcribingId === selectedSession.id
                           ? <><RefreshCw size={18} className="spin" /> Transcribing...</>
                           : summarizingId === selectedSession.id
@@ -1684,12 +1725,14 @@ function App() {
                     <div className="card-header-actions">
                       <button className="plaud-btn btn-outline btn-small"
                         onClick={() => startEditing(selectedSession.id, 'transcript')}
-                        disabled={editingFields[selectedSession.id]?.transcript}>
+                        disabled={editingFields[selectedSession.id]?.transcript}
+                        aria-label="Edit transcript" data-tooltip="Edit transcript manually">
                         <Pencil size={14} /> Edit
                       </button>
                       <button className="plaud-btn btn-outline btn-small"
                         onClick={() => handleTranscribe(selectedSession.id)}
-                        disabled={transcribingId !== null}>
+                        disabled={transcribingId !== null}
+                        aria-label="Re-transcribe" data-tooltip="Re-run transcription">
                         {transcribingId === selectedSession.id
                           ? <><RefreshCw size={14} className="spin" /> Transcribing...</>
                           : <><RefreshCw size={14} /> Re-transcribe</>}
@@ -1701,7 +1744,7 @@ function App() {
                   {editingFields[selectedSession.id]?.transcript ? (
                     <textarea className="inline-editor"
                       defaultValue={selectedSession.transcript}
-                      autoFocus
+                      autoFocus aria-label="Transcript editor"
                       onBlur={e => saveTranscript(selectedSession.id, e.target.value)}
                       onKeyDown={e => {
                         if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -1721,7 +1764,8 @@ function App() {
                     <div className="annotate-action" style={{ marginTop: '0.75rem' }}>
                       <button className="plaud-btn btn-outline btn-small"
                         onClick={() => handleAnnotateSpeakers(selectedSession.id)}
-                        disabled={annotatingId !== null || !selectedLlm}>
+                        disabled={annotatingId !== null || !selectedLlm}
+                        aria-label="Annotate speakers" data-tooltip="Label speaker names in the transcript">
                         {annotatingId === selectedSession.id
                           ? <><RefreshCw size={14} className="spin" /> Annotating Speakers...</>
                           : <><Users size={14} /> Annotate Speakers</>}
@@ -1746,7 +1790,8 @@ function App() {
                           {/* Provider selector */}
                           <div className="select-wrapper">
                             <select className="plaud-select llm-select"
-                              value={provider} onChange={e => handleProviderChange(e.target.value)}>
+                              value={provider} onChange={e => handleProviderChange(e.target.value)}
+                              aria-label="AI Provider for summarization">
                               <option value="ollama">Ollama (Local)</option>
                               {openaiKey && <option value="openai">OpenAI</option>}
                               {anthropicKey && <option value="anthropic">Anthropic</option>}
@@ -1756,12 +1801,14 @@ function App() {
                           {provider === "openai" && (
                             <input className="plaud-input api-key-input" type="password"
                               placeholder="sk-..." value={openaiKey}
-                              onChange={e => handleOpenaiKeyChange(e.target.value)} />
+                              onChange={e => handleOpenaiKeyChange(e.target.value)}
+                              aria-label="OpenAI API Key" />
                           )}
                           {provider === "anthropic" && (
                             <input className="plaud-input api-key-input" type="password"
                               placeholder="sk-ant-..." value={anthropicKey}
-                              onChange={e => handleAnthropicKeyChange(e.target.value)} />
+                              onChange={e => handleAnthropicKeyChange(e.target.value)}
+                              aria-label="Anthropic API Key" />
                           )}
                           {/* Template selector */}
                           <div className="select-wrapper">
@@ -1920,7 +1967,8 @@ function App() {
             <div className="quick-create-grid">
               {SESSION_TYPE_OPTIONS.map(opt => (
                 <button key={opt.value} className="card quick-create-card"
-                  onClick={() => quickCreateSession(opt.value)}>
+                  onClick={() => quickCreateSession(opt.value)}
+                  aria-label={`Create new ${opt.label}`}>
                   <div className="quick-create-icon">
                     {opt.value === 'meeting' && <Mic size={24} />}
                     {opt.value === 'voice_note' && <Sparkles size={24} />}
@@ -1944,36 +1992,40 @@ function App() {
           <span>Postilla</span>
         </div>
 
-        <div className="sidebar-actions">
-          <button className="sidebar-btn sidebar-btn-primary" onClick={() => setSelectedSessionId(null)}>
+        <div className="sidebar-actions" role="toolbar" aria-label="Main actions">
+          <button className="sidebar-btn sidebar-btn-primary" onClick={() => setSelectedSessionId(null)}
+            aria-label="New session" data-tooltip="Create a new session">
             <Mic size={14} /> New
           </button>
-          <button className={`sidebar-btn ${compareMode ? 'active' : ''}`} onClick={() => { setCompareMode(!compareMode); if (!compareMode) setSelectedSessionId(null); }} title="Compare sessions">
+          <button className={`sidebar-btn ${compareMode ? 'active' : ''}`} onClick={() => { setCompareMode(!compareMode); if (!compareMode) setSelectedSessionId(null); }}
+            aria-label="Compare sessions" data-tooltip="Compare two sessions side by side">
             <BrainCircuit size={14} />
           </button>
-          <button className="sidebar-btn" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="Toggle theme">
+          <button className="sidebar-btn" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            aria-label="Toggle theme" data-tooltip="Switch between light and dark mode">
             {theme === 'dark' ? <Sparkles size={14} /> : <Sparkles size={14} />}
           </button>
           <button className="sidebar-btn" onClick={() => {
             setShowSettings(true);
-            setTimeout(() => document.querySelector('.settings-section-header:last-of-type')?.scrollIntoView({ behavior: 'smooth' }), 100);
-          }} title="Dashboard">
+            setTimeout(() => document.getElementById('dashboard-section')?.scrollIntoView({ behavior: 'smooth' }), 100);
+          }} aria-label="Dashboard" data-tooltip="View usage statistics">
             <Sparkles size={14} />
           </button>
-          <button className="sidebar-btn" onClick={() => setShowSettings(true)} title="Settings">
+          <button className="sidebar-btn" onClick={() => setShowSettings(true)}
+            aria-label="Settings" data-tooltip="Open settings">
             <Settings2 size={14} />
           </button>
           <button className="sidebar-btn" onClick={async () => {
             const topics = await invoke<any[]>("get_help_topics");
             const msg = topics.map((t: any, i: number) => `${i+1}. ${t.title}\n   ${t.content}`).join('\n\n');
             alert(msg);
-          }} title="Help">
+          }} aria-label="Help" data-tooltip="Show help topics">
             ?
           </button>
         </div>
 
-        <div className="sidebar-search">
-          <input placeholder="Search sessions..." value={searchQuery}
+        <div className="sidebar-search" role="search" aria-label="Search sessions">
+          <input placeholder="Search sessions..." value={searchQuery} aria-label="Search sessions"
             onChange={e => {
               const v = e.target.value;
               setSearchQuery(v);
@@ -2063,27 +2115,31 @@ function App() {
 
         {/* ── RAG: Ask AI ── */}
         <div className="sidebar-rag">
-          <div className="rag-header" onClick={() => setShowRag(!showRag)}>
+          <div className="rag-header" onClick={() => setShowRag(!showRag)}
+            role="button" tabIndex={0} aria-label="Toggle Ask AI panel"
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowRag(!showRag); } }}>
             <BrainCircuit size={14} />
             <span>Ask AI</span>
             <ChevronDown size={12} className={`rag-chevron ${showRag ? 'open' : ''}`} />
           </div>
           {showRag && (
-            <div className="rag-body">
+            <div className="rag-body" role="region" aria-label="Ask AI about your sessions">
               <textarea className="rag-input" rows={2}
                 placeholder="Ask a question about your sessions..."
                 value={ragQuery}
                 onChange={e => setRagQuery(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleRagQuery(); } }} />
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleRagQuery(); } }}
+                aria-label="Your question" data-tooltip="Ask a question and the AI will search across all your sessions for the answer" />
               <button className="plaud-btn btn-primary btn-small" style={{ width: '100%', marginTop: '0.25rem' }}
-                onClick={handleRagQuery} disabled={ragLoading || !ragQuery.trim()}>
+                onClick={handleRagQuery} disabled={ragLoading || !ragQuery.trim()}
+                aria-label="Ask AI">
                 {ragLoading ? <RefreshCw size={14} className="spin" /> : 'Ask'}
               </button>
               {ragAnswer !== null && (
                 <div className="rag-answer">
                   <div className="rag-answer-text">{ragAnswer}</div>
                   <button className="plaud-btn btn-outline btn-small" style={{ marginTop: '0.25rem' }}
-                    onClick={() => setRagAnswer(null)}>Clear</button>
+                    onClick={() => setRagAnswer(null)} aria-label="Clear AI answer">Clear</button>
                 </div>
               )}
             </div>
