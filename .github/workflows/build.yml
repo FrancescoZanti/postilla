@@ -208,6 +208,9 @@ jobs:
           pattern: '*'
           merge-multiple: true
 
+      - name: Flatten artifacts
+        run: find . -type f -mindepth 2 -exec mv -t . {} +
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -239,6 +242,9 @@ jobs:
         with:
           pattern: '*'
           merge-multiple: true
+
+      - name: Flatten artifacts
+        run: find . -type f -mindepth 2 -exec mv -t . {} +
 
       - name: List all artifacts
         run: ls -lhR
