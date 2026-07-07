@@ -1,8 +1,10 @@
 # Postilla
 
-**Capture. Understand. Remember.**
+**Cattura. Comprendi. Ricorda.**
 
-Postilla è un'applicazione desktop local-first per catturare, trascrivere, riassumere e organizzare conversazioni, riunioni, note vocali, lezioni e file audio.
+Postilla è un'applicazione desktop local-first per la gestione audio che permette a professionisti, studenti e creatori di catturare, trascrivere, riassumere e organizzare conversazioni, riunioni, note vocali, lezioni e file audio, il tutto restando sulla tua macchina.
+
+A differenza di strumenti come Otter.ai o Descript, Postilla non sacrifica la tua privacy: opera interamente in locale, è agnostica rispetto ai provider AI e ti dà il controllo completo sui tuoi dati.
 
 Costruita con [Tauri 2](https://v2.tauri.app/), [React](https://react.dev/), [TypeScript](https://www.typescriptlang.org/) e [Rust](https://www.rust-lang.org/).
 
@@ -128,7 +130,7 @@ macOS non richiede dipendenze di sistema aggiuntive (WebView2 è nativo con WKWe
 
 ```bash
 # Clona il repository
-git clone https://github.com/fzanti/postilla.git
+git clone https://github.com/francescozanti/postilla.git
 cd postilla
 
 # Installa le dipendenze frontend

@@ -208,8 +208,8 @@ jobs:
           pattern: '*'
           merge-multiple: true
 
-      - name: Flatten artifacts
-        run: find . -type f -mindepth 2 -exec mv -t . {} +
+      - name: Collect artifacts
+        run: find . -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.tar.gz' -o -name '*.tgz' -o -name '*.zip' -o -name '*.sig' \) -exec mv -t . {} +
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -243,8 +243,8 @@ jobs:
           pattern: '*'
           merge-multiple: true
 
-      - name: Flatten artifacts
-        run: find . -type f -mindepth 2 -exec mv -t . {} +
+      - name: Collect artifacts
+        run: find . -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.tar.gz' -o -name '*.tgz' -o -name '*.zip' -o -name '*.sig' \) -exec mv -t . {} +
 
       - name: List all artifacts
         run: ls -lhR
