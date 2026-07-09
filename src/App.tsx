@@ -1082,7 +1082,7 @@ function App() {
   }
 
   function startNewTemplate() {
-    setEditingTemplate(null);
+    setEditingTemplate({ id: 0, name: "", session_type: "meeting", system_prompt: "" });
     setEditName("");
     setEditType("meeting");
     setEditPrompt("");
@@ -1097,7 +1097,7 @@ function App() {
 
   // ──── Export Template management ────
   function startNewExportTemplate() {
-    setEditingExportTemplate(null);
+    setEditingExportTemplate({ id: 0, name: "", body: "" });
     setEditExportName("");
     setEditExportBody("# {title}\n\n- **Type:** {type}\n- **Date:** {date}\n- **Participants:** {participants}\n- **Tags:** {tags}\n\n---\n\n## Transcript\n\n{transcript}\n\n---\n\n## Summary\n\n{summary}\n\n---\n\n## Mind Map\n\n{mind_map}");
   }
@@ -1369,9 +1369,9 @@ function App() {
               </button>
             </div>
 
-            {editingTemplate !== undefined && (
+            {editingTemplate !== null && (
               <div className="card template-editor">
-                <h4>{editingTemplate ? `Edit: ${editingTemplate.name}` : "New Template"}</h4>
+                <h4>{editingTemplate && editingTemplate.id ? `Edit: ${editingTemplate.name}` : "New Template"}</h4>
                 <div className="form-group">
                   <label>Name</label>
                   <input className="plaud-input" value={editName} onChange={e => setEditName(e.target.value)} placeholder="Template name" />
@@ -1448,9 +1448,9 @@ function App() {
               ))}
             </div>
 
-            {editingExportTemplate !== undefined && (
+            {editingExportTemplate !== null && (
               <div className="card template-editor">
-                <h4>{editingExportTemplate ? `Edit: ${editingExportTemplate.name}` : "New Export Template"}</h4>
+                <h4>{editingExportTemplate && editingExportTemplate.id ? `Edit: ${editingExportTemplate.name}` : "New Export Template"}</h4>
                 <div className="form-group">
                   <label>Name</label>
                   <input className="plaud-input" value={editExportName} onChange={e => setEditExportName(e.target.value)} placeholder="Template name" />
