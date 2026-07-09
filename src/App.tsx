@@ -193,6 +193,14 @@ function App() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
+  // Audio source selection
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedAudioDeviceId, setSelectedAudioDeviceId] = useState<string>(() => localStorage.getItem("postilla_audio_device") || "default");
+  const [captureSystemAudio, setCaptureSystemAudio] = useState<boolean>(() => localStorage.getItem("postilla_capture_system_audio") === "true");
+  const [systemAudioDeviceId, setSystemAudioDeviceId] = useState<string>(() => localStorage.getItem("postilla_system_audio_device") || "");
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const recordingTracksRef = useRef<MediaStreamTrack[]>([]);
+
   const [transcribingId, setTranscribingId] = useState<number | null>(null);
   const [summarizingId, setSummarizingId] = useState<number | null>(null);
   const [mindMappingId, setMindMappingId] = useState<number | null>(null);
@@ -287,6 +295,13 @@ function App() {
       setDownloadProgress(event.payload);
     });
     return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
+  useEffect(() => {
+    const handler = () => loadAudioDevices();
+    navigator.mediaDevices.addEventListener('devicechange', handler);
+    loadAudioDevices();
+    return () => navigator.mediaDevices.removeEventListener('devicechange', handler);
   }, []);
 
   useEffect(() => {
@@ -562,9 +577,45 @@ function App() {
 
   async function startRecording(sessionId: number) {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const tracksToStop: MediaStreamTrack[] = [];
+      let finalStream: MediaStream;
 
-      // Detect best supported audio MIME type on this platform
+      const useMultiSource = captureSystemAudio && systemAudioDeviceId && systemAudioDeviceId !== selectedAudioDeviceId;
+
+      if (useMultiSource) {
+        const micConstraints = selectedAudioDeviceId === "default" || !selectedAudioDeviceId
+          ? { audio: true }
+          : { audio: { deviceId: { exact: selectedAudioDeviceId } } };
+        const micStream = await navigator.mediaDevices.getUserMedia(micConstraints);
+        tracksToStop.push(...micStream.getTracks());
+
+        const sysStream = await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId: { exact: systemAudioDeviceId } }
+        });
+        tracksToStop.push(...sysStream.getTracks());
+
+        const audioContext = new AudioContext();
+        audioContextRef.current = audioContext;
+        const dest = audioContext.createMediaStreamDestination();
+
+        const micSource = audioContext.createMediaStreamSource(micStream);
+        micSource.connect(dest);
+
+        const sysSource = audioContext.createMediaStreamSource(sysStream);
+        sysSource.connect(dest);
+
+        finalStream = dest.stream;
+      } else {
+        const constraints = selectedAudioDeviceId === "default" || !selectedAudioDeviceId
+          ? { audio: true }
+          : { audio: { deviceId: { exact: selectedAudioDeviceId } } };
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        tracksToStop.push(...stream.getTracks());
+        finalStream = stream;
+      }
+
+      recordingTracksRef.current = tracksToStop;
+
       const types = [
         'audio/webm;codecs=opus',
         'audio/webm',
@@ -582,9 +633,8 @@ function App() {
         }
       }
       const options = mimeType ? { mimeType } : {};
-      console.log('MediaRecorder MIME:', mimeType || 'browser default');
 
-      const mediaRecorder = new MediaRecorder(stream, options);
+      const mediaRecorder = new MediaRecorder(finalStream, options);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
@@ -617,14 +667,28 @@ function App() {
         } catch (err) {
           console.error("Failed to save recording:", err);
         }
-        stream.getTracks().forEach(track => track.stop());
+
+        recordingTracksRef.current.forEach(track => track.stop());
+        recordingTracksRef.current = [];
+
+        if (audioContextRef.current) {
+          audioContextRef.current.close().catch(() => {});
+          audioContextRef.current = null;
+        }
       };
 
       mediaRecorder.start(1000);
       setRecordingId(sessionId);
     } catch (err: any) {
       console.error("Failed to start recording:", err);
-      alert(`Could not access microphone: ${err.message || err}`);
+      alert(`Could not access audio: ${err.message || err}`);
+
+      recordingTracksRef.current.forEach(track => track.stop());
+      recordingTracksRef.current = [];
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(() => {});
+        audioContextRef.current = null;
+      }
     }
   }
 
@@ -632,6 +696,37 @@ function App() {
     if (mediaRecorderRef.current && recordingId) {
       mediaRecorderRef.current.stop();
       setRecordingId(null);
+    }
+  }
+
+  async function loadAudioDevices() {
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true }).then(stream =>
+        stream.getTracks().forEach(t => t.stop())
+      );
+    } catch {
+      // Permission not granted yet — that's OK
+    }
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(d => d.kind === 'audioinput');
+      setAudioDevices(audioInputs);
+
+      if (!localStorage.getItem("postilla_system_audio_device")) {
+        const monitor = audioInputs.find(d =>
+          d.label.toLowerCase().includes('monitor') ||
+          d.label.toLowerCase().includes('stereo mix') ||
+          d.label.toLowerCase().includes('what u hear') ||
+          d.label.toLowerCase().includes('loopback')
+        );
+        if (monitor) {
+          setSystemAudioDeviceId(monitor.deviceId);
+        } else if (audioInputs.length > 1) {
+          setSystemAudioDeviceId(audioInputs[audioInputs.length - 1].deviceId);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to enumerate audio devices:", err);
     }
   }
 
@@ -1208,6 +1303,63 @@ function App() {
             </div>
           </section>
 
+          {/* ── Audio Recording ── */}
+          <section>
+            <div className="settings-section-header">
+              <h3>Audio Recording</h3>
+            </div>
+            <div className="card">
+              <div className="form-group">
+                <label>Microphone</label>
+                <div className="select-wrapper">
+                  <select className="plaud-select" value={selectedAudioDeviceId}
+                    onChange={e => { setSelectedAudioDeviceId(e.target.value); localStorage.setItem("postilla_audio_device", e.target.value); }}
+                    aria-label="Microphone">
+                    <option value="default">Default Microphone</option>
+                    {audioDevices.map(d => (
+                      <option key={d.deviceId} value={d.deviceId}>{d.label || `Device (${d.deviceId.slice(0, 8)}...)`}</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="select-icon" size={16} />
+                </div>
+                <button className="plaud-btn btn-ghost btn-small" onClick={loadAudioDevices}
+                  style={{ marginTop: '0.25rem', alignSelf: 'flex-start' }} aria-label="Refresh audio devices">
+                  <RefreshCw size={12} /> Refresh devices
+                </button>
+              </div>
+              <div className="form-group">
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={captureSystemAudio}
+                    onChange={e => { setCaptureSystemAudio(e.target.checked); localStorage.setItem("postilla_capture_system_audio", String(e.target.checked)); }}
+                    aria-label="Capture system audio" />
+                  Capture system audio (for Teams calls, etc.)
+                </label>
+                <p style={{ fontSize: '0.75rem', color: '#8e8ea0', margin: '0.25rem 0 0 0' }}>
+                  When enabled, both your microphone and system audio will be mixed into one recording.
+                </p>
+              </div>
+              {captureSystemAudio && (
+                <div className="form-group">
+                  <label>System Audio Device</label>
+                  <div className="select-wrapper">
+                    <select className="plaud-select" value={systemAudioDeviceId}
+                      onChange={e => { setSystemAudioDeviceId(e.target.value); localStorage.setItem("postilla_system_audio_device", e.target.value); }}
+                      aria-label="System audio device">
+                      <option value="">-- Select device --</option>
+                      {audioDevices.map(d => (
+                        <option key={d.deviceId} value={d.deviceId}>{d.label || `Device (${d.deviceId.slice(0, 8)}...)`}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="select-icon" size={16} />
+                  </div>
+                  <p style={{ fontSize: '0.75rem', color: '#8e8ea0', margin: '0.25rem 0 0 0' }}>
+                    On Linux, select a "Monitor of ..." source to capture system audio.
+                  </p>
+                </div>
+              )}
+            </div>
+          </section>
+
           {/* ── Summarization Templates ── */}
           <section>
             <div className="settings-section-header">
@@ -1615,6 +1767,31 @@ function App() {
                     <div className="action-circle"><Mic size={32} color="#007aff" /></div>
                     <h3>Ready to capture</h3>
                     <p>Start recording your voice or import an existing audio file.</p>
+                    {recordingId !== selectedSession.id && (
+                      <div className="audio-source-selector">
+                        <div className="select-wrapper" style={{ minWidth: 220 }}>
+                          <select className="plaud-select"
+                            value={selectedAudioDeviceId}
+                            onChange={e => { setSelectedAudioDeviceId(e.target.value); localStorage.setItem("postilla_audio_device", e.target.value); }}
+                            aria-label="Audio source">
+                            <option value="default">Default Microphone</option>
+                            {audioDevices.map(d => (
+                              <option key={d.deviceId} value={d.deviceId}>{d.label || `Device (${d.deviceId.slice(0, 8)}...)`}</option>
+                            ))}
+                          </select>
+                          <ChevronDown className="select-icon" size={16} />
+                        </div>
+                        {captureSystemAudio && systemAudioDeviceId && systemAudioDeviceId !== selectedAudioDeviceId && (
+                          <span className="pill" style={{ fontSize: '0.65rem' }}>System Audio On</span>
+                        )}
+                        {audioDevices.length === 0 && (
+                          <button className="plaud-btn btn-ghost btn-small" onClick={loadAudioDevices}
+                            aria-label="Refresh audio devices">
+                            <RefreshCw size={14} /> Refresh
+                          </button>
+                        )}
+                      </div>
+                    )}
                     <div className="actions-center">
                       {recordingId === selectedSession.id ? (
                         <button className="plaud-btn btn-danger active" onClick={stopRecording}

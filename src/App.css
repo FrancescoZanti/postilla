@@ -1474,3 +1474,14 @@ body, html, #root {
 .collapse-chevron:not(.open) {
   transform: rotate(-90deg);
 }
+
+/* ── Audio Source Selector ── */
+.audio-source-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  width: 100%;
+  max-width: 360px;
+  justify-content: center;
+}
