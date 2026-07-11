@@ -258,8 +258,7 @@ function App() {
   // Settings view
   const [showSettings, setShowSettings] = useState(false);
 
-  // Theme
-  const [theme, setTheme] = useState(() => localStorage.getItem("postilla_theme") || "light");
+  // Always dark mode
 
   // Session comparison
   const [compareMode, setCompareMode] = useState(false);
@@ -306,9 +305,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem("postilla_theme", theme);
-  }, [theme]);
+    document.documentElement.setAttribute("data-theme", "light");
+  }, []);
 
   async function loadSessions() {
     try {
@@ -2222,10 +2220,7 @@ function App() {
             aria-label="Compare sessions" data-tooltip="Compare two sessions side by side">
             <BrainCircuit size={14} />
           </button>
-          <button className="sidebar-btn" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            aria-label="Toggle theme" data-tooltip="Switch between light and dark mode">
-            {theme === 'dark' ? <Sparkles size={14} /> : <Sparkles size={14} />}
-          </button>
+
           <button className="sidebar-btn" onClick={() => {
             setShowSettings(true);
             setTimeout(() => document.getElementById('dashboard-section')?.scrollIntoView({ behavior: 'smooth' }), 100);
