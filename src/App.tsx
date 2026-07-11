@@ -258,7 +258,10 @@ function App() {
   // Settings view
   const [showSettings, setShowSettings] = useState(false);
 
-  // Always dark mode
+  // Dashboard stats
+  const [dashboardStats, setDashboardStats] = useState<Record<string, any> | null>(null);
+
+  // Always light mode
 
   // Session comparison
   const [compareMode, setCompareMode] = useState(false);
@@ -306,6 +309,10 @@ function App() {
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", "light");
+  }, []);
+
+  useEffect(() => {
+    invoke<Record<string, any>>("get_dashboard_stats").then(setDashboardStats).catch(() => {});
   }, []);
 
   async function loadSessions() {
@@ -1568,25 +1575,20 @@ function App() {
               <h3>Dashboard</h3>
             </div>
             <div className="card">
-              {(() => {
-                const [stats, setStats] = useState<Record<string, any> | null>(null);
-                useEffect(() => {
-                  invoke<Record<string, any>>("get_dashboard_stats").then(setStats).catch(() => {});
-                }, []);
-                if (!stats) return <p style={{ fontSize: '0.85rem', color: '#8e8ea0' }}>Loading stats...</p>;
-                return (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                    <div className="stat-box"><strong>{stats.total}</strong><span>Total Sessions</span></div>
-                    <div className="stat-box"><strong>{stats.with_transcript}</strong><span>Transcribed</span></div>
-                    <div className="stat-box"><strong>{stats.with_summary}</strong><span>Summarized</span></div>
-                    <div className="stat-box"><strong>{stats.total_audio_minutes}</strong><span>Audio Minutes</span></div>
-                    <div className="stat-box"><strong>{stats.by_type?.meeting || 0}</strong><span>Meetings</span></div>
-                    <div className="stat-box"><strong>{stats.by_type?.voice_note || 0}</strong><span>Voice Notes</span></div>
-                    <div className="stat-box"><strong>{stats.by_type?.lecture || 0}</strong><span>Lectures</span></div>
-                    <div className="stat-box"><strong>{stats.by_type?.import || 0}</strong><span>Imported</span></div>
-                  </div>
-                );
-              })()}
+              {!dashboardStats ? (
+                <p style={{ fontSize: '0.85rem', color: '#8e8ea0' }}>Loading stats...</p>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div className="stat-box"><strong>{dashboardStats.total}</strong><span>Total Sessions</span></div>
+                  <div className="stat-box"><strong>{dashboardStats.with_transcript}</strong><span>Transcribed</span></div>
+                  <div className="stat-box"><strong>{dashboardStats.with_summary}</strong><span>Summarized</span></div>
+                  <div className="stat-box"><strong>{dashboardStats.total_audio_minutes}</strong><span>Audio Minutes</span></div>
+                  <div className="stat-box"><strong>{dashboardStats.by_type?.meeting || 0}</strong><span>Meetings</span></div>
+                  <div className="stat-box"><strong>{dashboardStats.by_type?.voice_note || 0}</strong><span>Voice Notes</span></div>
+                  <div className="stat-box"><strong>{dashboardStats.by_type?.lecture || 0}</strong><span>Lectures</span></div>
+                  <div className="stat-box"><strong>{dashboardStats.by_type?.import || 0}</strong><span>Imported</span></div>
+                </div>
+              )}
             </div>
           </section>
         </div>
