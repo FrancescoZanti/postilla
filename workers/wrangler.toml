@@ -1,0 +1,3 @@
+name = "postilla-get-license"
+main = "get-license.js"
+compatibility_date = "2025-01-01"

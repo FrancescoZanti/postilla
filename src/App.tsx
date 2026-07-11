@@ -184,6 +184,7 @@ function App() {
   const [licenseKey, setLicenseKey] = useState("");
   const [licenseError, setLicenseError] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
+  const [email, setEmail] = useState("");
 
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
@@ -528,6 +529,37 @@ function App() {
       if (isValid) {
         localStorage.setItem("postilla_license", licenseKey);
         setIsLicensed(true);
+      }
+    } catch (err: any) {
+      setLicenseError(err.message || err);
+    } finally {
+      setIsVerifying(false);
+    }
+  }
+
+  async function handleRequestLicense(e: React.FormEvent) {
+    e.preventDefault();
+    if (!email) return;
+    setIsVerifying(true);
+    setLicenseError("");
+    setLicenseKey("");
+    try {
+      const res = await fetch("https://postilla-get-license.w61mm5pqt.workers.dev", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (data.license_key) {
+        setLicenseKey(data.license_key);
+        localStorage.setItem("postilla_license", data.license_key);
+        const deviceId = await invoke<string>("get_device_id");
+        const isValid = await invoke<boolean>("verify_license", { licenseKey: data.license_key, deviceId });
+        if (isValid) {
+          setIsLicensed(true);
+        }
+      } else {
+        setLicenseError(data.error || "Failed to get license. Try again later.");
       }
     } catch (err: any) {
       setLicenseError(err.message || err);
@@ -1219,8 +1251,20 @@ function App() {
               {isVerifying ? 'Verifying...' : 'Activate License'}
             </button>
           </form>
+          <div className="license-divider"><span>or</span></div>
+          <form onSubmit={handleRequestLicense}>
+            <input type="email" className="plaud-input" placeholder="your@email.com"
+              value={email} onChange={e => setEmail(e.target.value)}
+              style={{ textAlign: 'center' }}
+              aria-label="Email address" />
+            <button type="submit" className="plaud-btn btn-outline"
+              disabled={isVerifying || !email} style={{ width: '100%', marginTop: '0.75rem' }}
+              aria-label="Get free license">
+              {isVerifying ? 'Please wait...' : 'Get Free License'}
+            </button>
+          </form>
           <div className="license-footer">
-            Don't have a license? <a href="https://app.nanocorp.so/" target="_blank" rel="noreferrer">Buy one now</a>
+            <a href="https://app.nanocorp.so/" target="_blank" rel="noreferrer">Manage your license</a>
           </div>
         </div>
       </div>
