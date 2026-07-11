@@ -18,6 +18,11 @@ on:
 permissions:
   contents: read
 
+env:
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+  KEYGEN_ACCOUNT_ID: bb57e8aa-625f-42d2-b5b2-b308796e872e
+  KEYGEN_PRODUCT_ID: 4138ca3d-6125-4cbf-954f-7c921f34fc78
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -46,12 +51,6 @@ jobs:
           path: src-tauri/target/debug/*.log
           if-no-files-found: ignore
 
-env:
-  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-  KEYGEN_ACCOUNT_ID: bb57e8aa-625f-42d2-b5b2-b308796e872e
-  KEYGEN_PRODUCT_ID: 4138ca3d-6125-4cbf-954f-7c921f34fc78
-
-jobs:
   get-version:
     runs-on: ubuntu-latest
     outputs:
