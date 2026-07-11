@@ -24,6 +24,27 @@ Scarica l'ultima release per il tuo sistema dalla pagina [Releases](https://gith
 
 ---
 
+## Licenza
+
+Postilla richiede una licenza per essere utilizzata. All'avvio l'app mostra una schermata di attivazione con due opzioni:
+
+1. **Inserisci una chiave esistente** — Se hai già ricevuto una licenza, incollala nel campo dedicato e clicca su *Activate License*.
+2. **Richiedi una licenza gratuita** — Inserisci la tua email e clicca su *Get Free License*. Un Cloudflare Worker creerà automaticamente una licenza su Keygen.sh e la attiverà sul tuo dispositivo.
+
+### Come funziona
+
+```
+Utente → App (email) → Cloudflare Worker → Keygen.sh API → license_key → App → verify_license → attivazione
+```
+
+Il Worker è deployato su Cloudflare ed usa un token admin Keygen per creare utenti e licenze. Il token non è mai esposto al client.
+
+### Gestisci la tua licenza
+
+Puoi visualizzare e gestire le tue licenze (device attivi, disattivazione) tramite [Keygen Portal](https://app.nanocorp.so/).
+
+---
+
 ## Sviluppo
 
 ### Prerequisiti per piattaforma
@@ -171,10 +192,13 @@ postilla/
 │   │   ├── transcribe.rs   # Trascrizione locale (Parakeet/Whisper)
 │   │   ├── llm.rs          # Dispatch LLM generico
 │   │   ├── remote_llm.rs   # Provider remoti (OpenAI, Anthropic)
-│   │   └── license.rs      # Verifica licenza (Keygen.sh)
+│   │   └── license.rs      # Validazione licenza + attivazione device (Keygen.sh)
 │   ├── Cargo.toml
 │   ├── tauri.conf.json     # Configurazione Tauri
 │   └── capabilities/       # Permessi (default.json, desktop.json)
+├── workers/                # Cloudflare Worker per auto-generazione licenze
+│   ├── get-license.js      #   Endpoint email → license key
+│   └── wrangler.toml       #   Configurazione deploy
 ├── .github/workflows/      # CI/CD (build su push/PR/tag)
 ├── public/                 # Asset statici
 ├── index.html              # HTML d'ingresso
@@ -224,4 +248,6 @@ postilla/
 | Database | SQLite (rusqlite, bundled) |
 | Audio | wavesurfer.js 7 |
 | UI Icons | lucide-react |
+| Licensing | Keygen.sh |
+| License Portal | Self-serve via Cloudflare Worker + Keygen Portal |
 | CI/CD | GitHub Actions + Keygen.sh |
