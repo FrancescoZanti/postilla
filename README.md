@@ -10,6 +10,20 @@ Costruita con [Tauri 2](https://v2.tauri.app/), [React](https://react.dev/), [Ty
 
 ---
 
+## Screenshot
+
+> *Aggiungi qui i tuoi screenshot. Crea una cartella `docs/screenshots/` e inserisci le immagini.*
+
+| Schermata | Anteprima |
+|---|---|
+| Schermata principale | `docs/screenshots/main.png |
+| Attivazione licenza | `docs/screenshots/license.png |
+| Trascrizione e riassunto | `docs/screenshots/transcript.png |
+
+Per generare screenshot puliti della finestra, usa lo strumento screenshot del tuo sistema operativo. Puoi anche creare screenshot automatici via Tauri aggiungendo un comando temporaneo con [`tauri-plugin-screenshot`](https://github.com/tauri-apps/tauri-plugin-screenshot).
+
+---
+
 ## Installazione
 
 Scarica l'ultima release per il tuo sistema dalla pagina [Releases](https://github.com/francescozanti/postilla/releases).

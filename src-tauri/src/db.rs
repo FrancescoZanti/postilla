@@ -35,6 +35,27 @@ pub struct ExportTemplate {
     pub body: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Speaker {
+    pub id: i64,
+    pub display_name: String,
+    pub embedding: Option<Vec<f64>>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TranscriptBlock {
+    pub id: i64,
+    pub session_id: i64,
+    pub speaker_id: Option<i64>,
+    pub speaker_label: Option<String>,
+    pub start_time: f64,
+    pub end_time: f64,
+    pub text: String,
+    pub block_index: i64,
+}
+
 pub fn init_db(app_data_dir: &PathBuf) -> Result<Connection> {
     if !app_data_dir.exists() {
         fs::create_dir_all(app_data_dir).expect("Failed to create app data directory");
@@ -121,6 +142,34 @@ pub fn init_db(app_data_dir: &PathBuf) -> Result<Connection> {
         )?;
     }
 
+    // ── Speaker Intelligence tables ──
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS speakers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            display_name TEXT NOT NULL,
+            embedding TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        (),
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS transcript_blocks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            speaker_id INTEGER,
+            speaker_label TEXT,
+            start_time REAL NOT NULL,
+            end_time REAL NOT NULL,
+            text TEXT NOT NULL,
+            block_index INTEGER NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (speaker_id) REFERENCES speakers(id) ON DELETE SET NULL
+        )",
+        (),
+    )?;
+
     Ok(conn)
 }
 
@@ -170,6 +219,149 @@ pub fn search_sessions(conn: &Connection, query: &str) -> Vec<Session> {
         }
     }
     results
+}
+
+pub fn get_transcript_blocks(conn: &Connection, session_id: i64) -> Vec<TranscriptBlock> {
+    let mut stmt = match conn.prepare(
+        "SELECT id, session_id, speaker_id, speaker_label, start_time, end_time, text, block_index
+         FROM transcript_blocks WHERE session_id = ?1 ORDER BY block_index"
+    ) {
+        Ok(stmt) => stmt,
+        Err(_) => return vec![],
+    };
+    let rows = match stmt.query_map([&session_id], |row| {
+        Ok(TranscriptBlock {
+            id: row.get(0)?,
+            session_id: row.get(1)?,
+            speaker_id: row.get(2).unwrap_or(None),
+            speaker_label: row.get(3).unwrap_or(None),
+            start_time: row.get(4)?,
+            end_time: row.get(5)?,
+            text: row.get(6)?,
+            block_index: row.get(7)?,
+        })
+    }) {
+        Ok(rows) => rows,
+        Err(_) => return vec![],
+    };
+    let mut results = Vec::new();
+    for row in rows {
+        if let Ok(b) = row {
+            results.push(b);
+        }
+    }
+    results
+}
+
+pub fn delete_transcript_blocks(conn: &Connection, session_id: i64) {
+    let _ = conn.execute("DELETE FROM transcript_blocks WHERE session_id = ?1", [&session_id]);
+}
+
+pub fn insert_transcript_block(conn: &Connection, block: &TranscriptBlock) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO transcript_blocks (session_id, speaker_id, speaker_label, start_time, end_time, text, block_index)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        (
+            &block.session_id,
+            &block.speaker_id,
+            &block.speaker_label,
+            &block.start_time,
+            &block.end_time,
+            &block.text,
+            &block.block_index,
+        ),
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn get_all_speakers(conn: &Connection) -> Vec<Speaker> {
+    let mut stmt = match conn.prepare(
+        "SELECT id, display_name, embedding, created_at, updated_at FROM speakers ORDER BY display_name"
+    ) {
+        Ok(stmt) => stmt,
+        Err(_) => return vec![],
+    };
+    let rows = match stmt.query_map([], |row| {
+        Ok(Speaker {
+            id: row.get(0)?,
+            display_name: row.get(1)?,
+            embedding: {
+                let s: Option<String> = row.get(2).unwrap_or(None);
+                s.and_then(|v| serde_json::from_str(&v).ok())
+            },
+            created_at: row.get(3)?,
+            updated_at: row.get(4)?,
+        })
+    }) {
+        Ok(rows) => rows,
+        Err(_) => return vec![],
+    };
+    let mut results = Vec::new();
+    for row in rows {
+        if let Ok(s) = row {
+            results.push(s);
+        }
+    }
+    results
+}
+
+pub fn get_speaker_by_id(conn: &Connection, speaker_id: i64) -> Option<Speaker> {
+    let mut stmt = conn.prepare(
+        "SELECT id, display_name, embedding, created_at, updated_at FROM speakers WHERE id = ?1"
+    ).ok()?;
+    let result: Vec<Speaker> = stmt.query_map([&speaker_id], |row| {
+        Ok(Speaker {
+            id: row.get(0)?,
+            display_name: row.get(1)?,
+            embedding: {
+                let s: Option<String> = row.get(2).unwrap_or(None);
+                s.and_then(|v| serde_json::from_str(&v).ok())
+            },
+            created_at: row.get(3)?,
+            updated_at: row.get(4)?,
+        })
+    }).ok()?.filter_map(|r| r.ok()).collect();
+    result.into_iter().next()
+}
+
+pub fn upsert_speaker(conn: &Connection, speaker: &Speaker) -> Result<i64> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let embedding_json = speaker.embedding.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default());
+    if speaker.id > 0 {
+        conn.execute(
+            "UPDATE speakers SET display_name = ?1, embedding = ?2, updated_at = ?3 WHERE id = ?4",
+            (&speaker.display_name, &embedding_json, &now, &speaker.id),
+        )?;
+        Ok(speaker.id)
+    } else {
+        conn.execute(
+            "INSERT INTO speakers (display_name, embedding, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            (&speaker.display_name, &embedding_json, &now, &now),
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+}
+
+pub fn rename_speaker(conn: &Connection, speaker_id: i64, new_name: &str) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE speakers SET display_name = ?1, updated_at = ?2 WHERE id = ?3",
+        (new_name, &now, &speaker_id),
+    )?;
+    conn.execute(
+        "UPDATE transcript_blocks SET speaker_label = ?1 WHERE speaker_id = ?2",
+        (new_name, &speaker_id),
+    )?;
+    Ok(())
+}
+
+pub fn delete_speaker(conn: &Connection, speaker_id: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE transcript_blocks SET speaker_id = NULL, speaker_label = NULL WHERE speaker_id = ?1",
+        [&speaker_id],
+    )?;
+    conn.execute("DELETE FROM speakers WHERE id = ?1", [&speaker_id])?;
+    Ok(())
 }
 
 #[cfg(test)]

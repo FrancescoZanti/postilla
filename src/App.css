@@ -1500,3 +1500,155 @@ body, html, #root {
   max-width: 360px;
   justify-content: center;
 }
+
+/* ── Recording Controls (timer + level meter + pause/stop) ── */
+.recording-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.recording-timer {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.recording-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-red);
+  opacity: 0.4;
+}
+
+.recording-dot.live {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+  opacity: 1;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.level-meter-track {
+  width: 100%;
+  max-width: 240px;
+  height: 6px;
+  background: var(--bg-card);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.level-meter-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #34c759, #ff9f0a, #ff3b30);
+  transition: width 0.08s ease;
+}
+
+.recording-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+/* ── Speaker Intelligence ── */
+.transcript-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+}
+
+.speaker-block {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.speaker-block-header {
+  background: var(--bg-hover);
+  padding: 0.3rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.speaker-label-block {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--accent-purple);
+  cursor: context-menu;
+  padding: 0.1rem 0.25rem;
+  border-radius: var(--radius-sm);
+}
+
+.speaker-label-block:hover {
+  background: var(--bg-card);
+}
+
+.speaker-block-text {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.speaker-block-text p {
+  margin: 0 0 0.35rem 0;
+}
+
+.speaker-block-text p:last-child {
+  margin-bottom: 0;
+}
+
+.inline-rename-input {
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.15rem 0.35rem;
+  border: 1px solid var(--accent-purple);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  outline: none;
+  width: 200px;
+}
+
+/* ── Speaker Directory ── */
+.speaker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.speaker-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+}
+
+.speaker-list-item:hover {
+  background: var(--bg-hover);
+}
+
+.speaker-list-name {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.speaker-list-actions {
+  display: flex;
+  gap: 0.25rem;
+}

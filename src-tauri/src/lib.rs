@@ -3,8 +3,9 @@ pub mod transcribe;
 pub mod llm;
 pub mod license;
 pub mod remote_llm;
+pub mod speaker;
 
-use db::{Session, Template, ExportTemplate, init_db};
+use db::{Session, Template, ExportTemplate, TranscriptBlock, Speaker, init_db};
 use rusqlite::Connection;
 use std::sync::Mutex;
 use std::fs;
@@ -455,6 +456,93 @@ fn update_session_tags(state: State<'_, AppState>, session_id: i64, tags: String
     db::rebuild_fts(conn);
     Ok(())
 }
+
+// ── Speaker Intelligence Commands ──
+
+#[tauri::command]
+async fn run_diarization(app: AppHandle, state: State<'_, AppState>, session_id: i64, language: String) -> Result<Vec<TranscriptBlock>, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+
+    // 1. Get file path from DB
+    let file_path = {
+        let db_guard = state.db.lock().unwrap();
+        let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+        let mut stmt = conn.prepare("SELECT file_path FROM sessions WHERE id = ?1").unwrap();
+        let path: Option<String> = stmt.query_row([&session_id], |row| row.get(0)).unwrap_or(None);
+        path.ok_or("No file path associated with this session")?
+    };
+
+    let audio_path = PathBuf::from(&file_path);
+
+    // 2. Run full transcription first
+    let (cli_path, model_path) = transcribe::ensure_parakeet_setup(&app, &app_data_dir).await?;
+
+    let _ = app.emit("download-progress", transcribe::ProgressPayload {
+        item: "Transcribing audio...".to_string(),
+        progress: 50.0,
+    });
+
+    let transcript = transcribe::run_transcription(&cli_path, &model_path, &audio_path, &language)?;
+
+    let _ = app.emit("download-progress", transcribe::ProgressPayload {
+        item: "Running speaker diarization...".to_string(),
+        progress: 80.0,
+    });
+
+    // 3. Run diarization pipeline
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+
+    let blocks = speaker::SpeakerService::run_diarization_pipeline(
+        conn,
+        &app_data_dir,
+        session_id,
+        &file_path,
+        &transcript,
+    )?;
+
+    drop(db_guard);
+
+    Ok(blocks)
+}
+
+#[tauri::command]
+fn get_transcript_blocks(state: State<'_, AppState>, session_id: i64) -> Result<Vec<TranscriptBlock>, String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    Ok(speaker::SpeakerRepo::get_blocks_for_session(conn, session_id))
+}
+
+#[tauri::command]
+fn get_speaker_directory(state: State<'_, AppState>) -> Result<Vec<Speaker>, String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    Ok(speaker::SpeakerRepo::get_all_speakers(conn))
+}
+
+#[tauri::command]
+fn rename_speaker(state: State<'_, AppState>, speaker_id: i64, new_name: String) -> Result<(), String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    speaker::SpeakerRepo::rename_speaker(conn, speaker_id, &new_name)
+}
+
+#[tauri::command]
+fn delete_speaker(state: State<'_, AppState>, speaker_id: i64) -> Result<(), String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    speaker::SpeakerRepo::delete_speaker(conn, speaker_id)
+}
+
+#[tauri::command]
+fn delete_transcript_blocks(state: State<'_, AppState>, session_id: i64) -> Result<(), String> {
+    let db_guard = state.db.lock().unwrap();
+    let conn = db_guard.as_ref().ok_or("Database not initialized")?;
+    speaker::SpeakerRepo::delete_blocks_for_session(conn, session_id);
+    Ok(())
+}
+
+// ── Export Templates ──
 
 #[tauri::command]
 fn get_export_templates(state: State<'_, AppState>) -> Result<Vec<ExportTemplate>, String> {
@@ -1054,6 +1142,8 @@ pub fn run() {
             rag_query, delete_session, get_audio_duration,
             export_session_srt, export_session_vtt, export_session_txt, export_session_obsidian,
             get_dashboard_stats, cleanup_old_sessions, get_help_topics,
+            run_diarization, get_transcript_blocks, get_speaker_directory,
+            rename_speaker, delete_speaker, delete_transcript_blocks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

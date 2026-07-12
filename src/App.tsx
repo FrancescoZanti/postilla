@@ -33,6 +33,25 @@ interface Template {
   system_prompt: string;
 }
 
+interface TranscriptBlock {
+  id: number;
+  session_id: number;
+  speaker_id?: number | null;
+  speaker_label?: string | null;
+  start_time: number;
+  end_time: number;
+  text: string;
+  block_index: number;
+}
+
+interface Speaker {
+  id: number;
+  display_name: string;
+  embedding?: number[] | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface DownloadProgress {
   item: string;
   progress: number;
@@ -191,8 +210,15 @@ function App() {
 
   // Recording state
   const [recordingId, setRecordingId] = useState<number | null>(null);
+  const [recordingState, setRecordingState] = useState<'recording' | 'paused' | null>(null);
+  const [recordingElapsed, setRecordingElapsed] = useState(0);
+  const [audioLevel, setAudioLevel] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const recordingStartTimeRef = useRef(0);
+  const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const levelRafRef = useRef<number | null>(null);
 
   // Audio source selection
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
@@ -209,6 +235,13 @@ function App() {
   const [annotatingId, setAnnotatingId] = useState<number | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [transcribeLang, setTranscribeLang] = useState<string>("auto");
+
+  // Speaker Intelligence
+  const [transcriptBlocks, setTranscriptBlocks] = useState<TranscriptBlock[]>([]);
+  const [diarizingId, setDiarizingId] = useState<number | null>(null);
+  const [speakerDirectory, setSpeakerDirectory] = useState<Speaker[]>([]);
+  const [renamingSpeakerId, setRenamingSpeakerId] = useState<number | null>(null);
+  const [renamingSpeakerValue, setRenamingSpeakerValue] = useState("");
 
   // Search
   const [searchQuery, setSearchQuery] = useState("");
@@ -520,8 +553,13 @@ function App() {
         const tpl = getDefaultTemplate(session.session_type);
         if (tpl) setSelectedTemplateId(tpl.id);
       }
+      loadTranscriptBlocks(selectedSessionId);
     }
   }, [selectedSessionId, sessions, templates]);
+
+  useEffect(() => {
+    loadSpeakerDirectory();
+  }, []);
 
   async function handleActivateLicense(e: React.FormEvent) {
     e.preventDefault();
@@ -612,12 +650,26 @@ function App() {
     }
   }
 
+  function formatTime(seconds: number) {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+
   async function startRecording(sessionId: number) {
     try {
+      stopTimerAndLevelMeter();
       const tracksToStop: MediaStreamTrack[] = [];
       let finalStream: MediaStream;
 
       const useMultiSource = captureSystemAudio && systemAudioDeviceId && systemAudioDeviceId !== selectedAudioDeviceId;
+
+      const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
+      const dest = audioContext.createMediaStreamDestination();
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyserRef.current = analyser;
 
       if (useMultiSource) {
         const micConstraints = selectedAudioDeviceId === "default" || !selectedAudioDeviceId
@@ -631,12 +683,9 @@ function App() {
         });
         tracksToStop.push(...sysStream.getTracks());
 
-        const audioContext = new AudioContext();
-        audioContextRef.current = audioContext;
-        const dest = audioContext.createMediaStreamDestination();
-
         const micSource = audioContext.createMediaStreamSource(micStream);
         micSource.connect(dest);
+        micSource.connect(analyser);
 
         const sysSource = audioContext.createMediaStreamSource(sysStream);
         sysSource.connect(dest);
@@ -648,7 +697,12 @@ function App() {
           : { audio: { deviceId: { exact: selectedAudioDeviceId } } };
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         tracksToStop.push(...stream.getTracks());
-        finalStream = stream;
+
+        const source = audioContext.createMediaStreamSource(stream);
+        source.connect(analyser);
+        analyser.connect(dest);
+
+        finalStream = dest.stream;
       }
 
       recordingTracksRef.current = tracksToStop;
@@ -681,7 +735,29 @@ function App() {
         }
       };
 
+      mediaRecorder.onpause = () => {
+        setRecordingState('paused');
+        if (elapsedIntervalRef.current) {
+          clearInterval(elapsedIntervalRef.current);
+          elapsedIntervalRef.current = null;
+        }
+        if (levelRafRef.current) {
+          cancelAnimationFrame(levelRafRef.current);
+          levelRafRef.current = null;
+        }
+        setAudioLevel(0);
+      };
+
+      mediaRecorder.onresume = () => {
+        setRecordingState('recording');
+        recordingStartTimeRef.current = Date.now() - recordingElapsed * 1000;
+        startTimer();
+        startLevelMeter();
+      };
+
       mediaRecorder.onstop = async () => {
+        stopTimerAndLevelMeter();
+
         const effectiveMime = mediaRecorder.mimeType || mimeType || 'audio/webm';
         const audioBlob = new Blob(audioChunksRef.current, { type: effectiveMime });
         if (audioBlob.size === 0) { console.error("Audio blob is empty!"); return; }
@@ -712,10 +788,17 @@ function App() {
           audioContextRef.current.close().catch(() => {});
           audioContextRef.current = null;
         }
+        analyserRef.current = null;
       };
 
       mediaRecorder.start(1000);
       setRecordingId(sessionId);
+      setRecordingState('recording');
+      setRecordingElapsed(0);
+      setAudioLevel(0);
+      recordingStartTimeRef.current = Date.now();
+      startTimer();
+      startLevelMeter();
     } catch (err: any) {
       console.error("Failed to start recording:", err);
       alert(`Could not access audio: ${err.message || err}`);
@@ -726,6 +809,48 @@ function App() {
         audioContextRef.current.close().catch(() => {});
         audioContextRef.current = null;
       }
+      analyserRef.current = null;
+      stopTimerAndLevelMeter();
+    }
+  }
+
+  function startTimer() {
+    if (elapsedIntervalRef.current) clearInterval(elapsedIntervalRef.current);
+    elapsedIntervalRef.current = setInterval(() => {
+      setRecordingElapsed(Math.floor((Date.now() - recordingStartTimeRef.current) / 1000));
+    }, 200);
+  }
+
+  function startLevelMeter() {
+    const analyser = analyserRef.current;
+    if (!analyser) return;
+
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    function update() {
+      if (!analyserRef.current) return;
+      analyserRef.current.getByteTimeDomainData(dataArray);
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const value = (dataArray[i] - 128) / 128;
+        sum += value * value;
+      }
+      const rms = Math.sqrt(sum / dataArray.length);
+      setAudioLevel(Math.min(rms * 2, 1));
+      levelRafRef.current = requestAnimationFrame(update);
+    }
+
+    levelRafRef.current = requestAnimationFrame(update);
+  }
+
+  function stopTimerAndLevelMeter() {
+    if (elapsedIntervalRef.current) {
+      clearInterval(elapsedIntervalRef.current);
+      elapsedIntervalRef.current = null;
+    }
+    if (levelRafRef.current) {
+      cancelAnimationFrame(levelRafRef.current);
+      levelRafRef.current = null;
     }
   }
 
@@ -733,6 +858,19 @@ function App() {
     if (mediaRecorderRef.current && recordingId) {
       mediaRecorderRef.current.stop();
       setRecordingId(null);
+      setRecordingState(null);
+    }
+  }
+
+  function pauseRecording() {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.pause();
+    }
+  }
+
+  function resumeRecording() {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
+      mediaRecorderRef.current.resume();
     }
   }
 
@@ -921,6 +1059,63 @@ function App() {
       alert(`Speaker annotation failed: ${err.message || err}`);
     } finally {
       setAnnotatingId(null);
+    }
+  }
+
+  // ── Speaker Intelligence ──
+
+  async function loadTranscriptBlocks(sessionId: number) {
+    try {
+      const blocks = await invoke<TranscriptBlock[]>("get_transcript_blocks", { sessionId });
+      setTranscriptBlocks(blocks);
+    } catch { setTranscriptBlocks([]); }
+  }
+
+  async function loadSpeakerDirectory() {
+    try {
+      const dir = await invoke<Speaker[]>("get_speaker_directory");
+      setSpeakerDirectory(dir);
+    } catch { setSpeakerDirectory([]); }
+  }
+
+  async function handleRunDiarization(sessionId: number) {
+    try {
+      setDiarizingId(sessionId);
+      await invoke("run_diarization", { sessionId, language: transcribeLang });
+      await loadSessions();
+      await loadTranscriptBlocks(sessionId);
+      await loadSpeakerDirectory();
+    } catch (err: any) {
+      console.error("Diarization failed:", err);
+      alert(`Speaker Intelligence failed: ${err.message || err}`);
+    } finally {
+      setDiarizingId(null);
+    }
+  }
+
+  async function handleRenameSpeaker(speakerId: number, newName: string) {
+    if (!newName.trim()) return;
+    try {
+      await invoke("rename_speaker", { speakerId, newName: newName.trim() });
+      const sid = selectedSession?.id;
+      if (sid) await loadTranscriptBlocks(sid);
+      await loadSpeakerDirectory();
+    } catch (err: any) {
+      console.error("Rename failed:", err);
+      alert(`Rename failed: ${err.message || err}`);
+    }
+    setRenamingSpeakerId(null);
+    setRenamingSpeakerValue("");
+  }
+
+  async function handleDeleteSpeaker(speakerId: number) {
+    try {
+      await invoke("delete_speaker", { speakerId });
+      const sid = selectedSession?.id;
+      if (sid) await loadTranscriptBlocks(sid);
+      await loadSpeakerDirectory();
+    } catch (err: any) {
+      console.error("Delete speaker failed:", err);
     }
   }
 
@@ -1409,6 +1604,58 @@ function App() {
             </div>
           </section>
 
+          {/* ── Speaker Directory ── */}
+          <section>
+            <div className="settings-section-header">
+              <h3>Speaker Directory</h3>
+              <button className="plaud-btn btn-outline btn-small" onClick={loadSpeakerDirectory}
+                aria-label="Refresh speakers">
+                <RefreshCw size={12} /> Refresh
+              </button>
+            </div>
+            <div className="card">
+              {speakerDirectory.length === 0 ? (
+                <p style={{ fontSize: '0.85rem', color: '#8e8ea0', padding: '0.5rem 0' }}>
+                  No speakers yet. Run Speaker Intelligence on a session to build your directory.
+                </p>
+              ) : (
+                <div className="speaker-list">
+                  {speakerDirectory.map(s => (
+                    <div key={s.id} className="speaker-list-item">
+                      <span className="speaker-list-name">{s.display_name}</span>
+                      <div className="speaker-list-actions">
+                        <button className="plaud-btn btn-ghost btn-small"
+                          onClick={() => { setRenamingSpeakerValue(s.display_name); setRenamingSpeakerId(-s.id); }}
+                          aria-label="Rename">
+                          <Pencil size={12} />
+                        </button>
+                        <button className="plaud-btn btn-ghost btn-small"
+                          onClick={() => handleDeleteSpeaker(s.id)}
+                          aria-label="Remove">
+                          <X size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {renamingSpeakerId !== null && renamingSpeakerId < 0 && (
+                <div style={{ marginTop: '0.5rem' }}>
+                  <input className="inline-rename-input"
+                    value={renamingSpeakerValue}
+                    onChange={e => setRenamingSpeakerValue(e.target.value)}
+                    onBlur={() => handleRenameSpeaker(-renamingSpeakerId, renamingSpeakerValue)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') handleRenameSpeaker(-renamingSpeakerId, renamingSpeakerValue);
+                      if (e.key === 'Escape') { setRenamingSpeakerId(null); setRenamingSpeakerValue(''); }
+                    }}
+                    autoFocus
+                  />
+                </div>
+              )}
+            </div>
+          </section>
+
           {/* ── Summarization Templates ── */}
           <section>
             <div className="settings-section-header">
@@ -1838,20 +2085,44 @@ function App() {
                     )}
                     <div className="actions-center">
                       {recordingId === selectedSession.id ? (
-                        <button className="plaud-btn btn-danger active" onClick={stopRecording}
-                          aria-label="Stop recording" data-tooltip="Stop the current recording">
-                          <MicOff size={18} /> Stop Recording
-                        </button>
+                        <div className="recording-controls">
+                          <div className="recording-timer">
+                            <span className={`recording-dot ${recordingState === 'recording' ? 'live' : ''}`} />
+                            {formatTime(recordingElapsed)}
+                          </div>
+                          <div className="level-meter-track">
+                            <div className="level-meter-fill" style={{ width: `${audioLevel * 100}%` }} />
+                          </div>
+                          <div className="recording-actions">
+                            {recordingState === 'recording' ? (
+                              <button className="plaud-btn btn-ghost btn-small" onClick={pauseRecording}
+                                aria-label="Pause recording" data-tooltip="Pause the current recording">
+                                <Pause size={14} /> Pause
+                              </button>
+                            ) : (
+                              <button className="plaud-btn btn-ghost btn-small" onClick={resumeRecording}
+                                aria-label="Resume recording" data-tooltip="Resume recording">
+                                <Play size={14} /> Resume
+                              </button>
+                            )}
+                            <button className="plaud-btn btn-danger active btn-small" onClick={stopRecording}
+                              aria-label="Stop recording" data-tooltip="Stop the current recording">
+                              <MicOff size={14} /> Stop
+                            </button>
+                          </div>
+                        </div>
                       ) : (
-                        <button className="plaud-btn btn-primary" onClick={() => startRecording(selectedSession.id)} disabled={recordingId !== null}
-                          aria-label="Record audio" data-tooltip="Start recording from your microphone">
-                          <Mic size={18} /> Record Audio
-                        </button>
+                        <>
+                          <button className="plaud-btn btn-primary" onClick={() => startRecording(selectedSession.id)} disabled={recordingId !== null}
+                            aria-label="Record audio" data-tooltip="Start recording from your microphone">
+                            <Mic size={18} /> Record Audio
+                          </button>
+                          <button className="plaud-btn btn-outline" onClick={() => handleImport(selectedSession.id)} disabled={recordingId !== null}
+                            aria-label="Import audio file" data-tooltip="Import an existing audio file from your computer">
+                            <FileAudio size={18} /> Import File
+                          </button>
+                        </>
                       )}
-                      <button className="plaud-btn btn-outline" onClick={() => handleImport(selectedSession.id)} disabled={recordingId !== null}
-                        aria-label="Import audio file" data-tooltip="Import an existing audio file from your computer">
-                        <FileAudio size={18} /> Import File
-                      </button>
                     </div>
                   </div>
                 </div>
@@ -1958,6 +2229,14 @@ function App() {
                           ? <><RefreshCw size={14} className="spin" /> Transcribing...</>
                           : <><RefreshCw size={14} /> Re-transcribe</>}
                       </button>
+                      <button className="plaud-btn btn-accent btn-small"
+                        onClick={() => handleRunDiarization(selectedSession.id)}
+                        disabled={diarizingId !== null || transcribingId !== null}
+                        aria-label="Speaker Intelligence" data-tooltip="Detect speakers and structure transcript">
+                        {diarizingId === selectedSession.id
+                          ? <><RefreshCw size={14} className="spin" /> Analysing Speakers...</>
+                          : <><Users size={14} /> Speaker Intelligence</>}
+                      </button>
                     </div>
                   </div>
                   {!collapsedSections.has('transcript') && (
@@ -1976,6 +2255,48 @@ function App() {
                         }
                       }}
                     />
+                  ) : transcriptBlocks.length > 0 && transcriptBlocks[0]?.session_id === selectedSession.id ? (
+                    <div className="transcript-blocks">
+                      {(() => {
+                        const grouped: { label: string; texts: { text: string; blockId: number }[]; lastEnd: number }[] = [];
+                        for (const block of transcriptBlocks) {
+                          const label = block.speaker_label || 'Unknown';
+                          const prev = grouped[grouped.length - 1];
+                          const gap = prev ? block.start_time - prev.lastEnd : 999;
+                          if (prev && prev.label === label && gap < 8) {
+                            prev.texts.push({ text: block.text, blockId: block.id });
+                            prev.lastEnd = block.end_time;
+                          } else {
+                            grouped.push({ label, texts: [{ text: block.text, blockId: block.id }], lastEnd: block.end_time });
+                          }
+                        }
+                        return grouped.map((g, gi) => (
+                          <div key={gi} className="speaker-block">
+                            <div className="speaker-block-header">
+                              {renamingSpeakerId === gi ? (
+                                <input className="inline-rename-input"
+                                  value={renamingSpeakerValue}
+                                  onChange={e => setRenamingSpeakerValue(e.target.value)}
+                                  onBlur={() => { const s = speakerDirectory.find(s => s.display_name === g.label); if (s) handleRenameSpeaker(s.id, renamingSpeakerValue); else setRenamingSpeakerId(null); }}
+                                  onKeyDown={e => { if (e.key === 'Enter') { const s = speakerDirectory.find(s => s.display_name === g.label); if (s) handleRenameSpeaker(s.id, renamingSpeakerValue); } if (e.key === 'Escape') setRenamingSpeakerId(null); }}
+                                  autoFocus
+                                />
+                              ) : (
+                                <span className="speaker-label-block"
+                                  onContextMenu={e => { e.preventDefault(); setRenamingSpeakerValue(g.label); setRenamingSpeakerId(gi); }}>
+                                  {g.label}
+                                </span>
+                              )}
+                            </div>
+                            <div className="speaker-block-text">
+                              {g.texts.map((t, ti) => (
+                                <p key={ti}>{t.text}</p>
+                              ))}
+                            </div>
+                          </div>
+                        ));
+                      })()}
+                    </div>
                   ) : (
                     <div className="transcript-text" onDoubleClick={() => startEditing(selectedSession.id, 'transcript')}>
                       {renderAnnotated(selectedSession.transcript)}
