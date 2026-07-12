@@ -4,7 +4,7 @@
 
 Postilla è un'applicazione desktop local-first per la gestione audio che permette a professionisti, studenti e creatori di catturare, trascrivere, riassumere e organizzare conversazioni, riunioni, note vocali, lezioni e file audio, il tutto restando sulla tua macchina.
 
-A differenza di strumenti come Otter.ai o Descript, Postilla non sacrifica la tua privacy: opera interamente in locale, è agnostica rispetto ai provider AI e ti dà il controllo completo sui tuoi dati.
+Postilla non sacrifica la tua privacy: opera interamente in locale, è agnostica rispetto ai provider AI e ti dà il controllo completo sui tuoi dati.
 
 Costruita con [Tauri 2](https://v2.tauri.app/), [React](https://react.dev/), [TypeScript](https://www.typescriptlang.org/) e [Rust](https://www.rust-lang.org/).
 
@@ -12,7 +12,6 @@ Costruita con [Tauri 2](https://v2.tauri.app/), [React](https://react.dev/), [Ty
 
 ## Screenshot
 
-> *Aggiungi qui i tuoi screenshot. Crea una cartella `docs/screenshots/` e inserisci le immagini.*
 
 | Schermata | Anteprima |
 |---|---|
@@ -20,7 +19,6 @@ Costruita con [Tauri 2](https://v2.tauri.app/), [React](https://react.dev/), [Ty
 | Attivazione licenza | `docs/screenshots/license.png |
 | Trascrizione e riassunto | `docs/screenshots/transcript.png |
 
-Per generare screenshot puliti della finestra, usa lo strumento screenshot del tuo sistema operativo. Puoi anche creare screenshot automatici via Tauri aggiungendo un comando temporaneo con [`tauri-plugin-screenshot`](https://github.com/tauri-apps/tauri-plugin-screenshot).
 
 ---
 
@@ -45,17 +43,6 @@ Postilla richiede una licenza per essere utilizzata. All'avvio l'app mostra una 
 1. **Inserisci una chiave esistente** — Se hai già ricevuto una licenza, incollala nel campo dedicato e clicca su *Activate License*.
 2. **Richiedi una licenza gratuita** — Inserisci la tua email e clicca su *Get Free License*. Un Cloudflare Worker creerà automaticamente una licenza su Keygen.sh e la attiverà sul tuo dispositivo.
 
-### Come funziona
-
-```
-Utente → App (email) → Cloudflare Worker → Keygen.sh API → license_key → App → verify_license → attivazione
-```
-
-Il Worker è deployato su Cloudflare ed usa un token admin Keygen per creare utenti e licenze. Il token non è mai esposto al client.
-
-### Gestisci la tua licenza
-
-Puoi visualizzare e gestire le tue licenze (device attivi, disattivazione) tramite [Keygen Portal](https://app.nanocorp.so/).
 
 ---
 
