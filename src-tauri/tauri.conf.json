@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Postilla",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "identifier": "com.fzanti.postilla",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -18,7 +18,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost https://ipc.localhost; media-src 'self' asset: http://asset.localhost https://asset.localhost blob: data: mediastream:; style-src 'self' 'unsafe-inline'",
+      "csp": "default-src 'self' ipc: http://ipc.localhost https://ipc.localhost; connect-src 'self' https://postilla-get-license.w61mm5pqt.workers.dev https://api.keygen.sh; media-src 'self' asset: http://asset.localhost https://asset.localhost blob: data: mediastream:; style-src 'self' 'unsafe-inline'",
       "assetProtocol": {
         "enable": true,
         "scope": ["$APPDATA/**"]

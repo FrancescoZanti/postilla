@@ -5,8 +5,18 @@
 //   KEYGEN_POLICY_ID   - the policy UUID for Postilla licenses
 //   GITHUB_REPO        - repo for updates (es. francescozanti/postilla)
 
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+}
+
 export default {
   async fetch(req, env) {
+    if (req.method === "OPTIONS") {
+      return new Response(null, { headers: CORS })
+    }
+
     const url = new URL(req.url)
 
     if (url.pathname === "/update") {
@@ -17,17 +27,21 @@ export default {
   },
 }
 
+function json(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...CORS, "Content-Type": "application/json" },
+  })
+}
+
 async function handleLicense(req, env) {
   if (req.method !== "POST") {
-    return new Response("Method not allowed", { status: 405 })
+    return json({ error: "Method not allowed" }, 405)
   }
 
   const { email } = await req.json()
   if (!email || !email.includes("@")) {
-    return new Response(JSON.stringify({ error: "Invalid email address" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    })
+    return json({ error: "Invalid email address" }, 400)
   }
 
   const { KEYGEN_ACCOUNT_ID, KEYGEN_API_TOKEN, KEYGEN_POLICY_ID } = env
@@ -61,10 +75,7 @@ async function handleLicense(req, env) {
       userId = users.data?.[0]?.id
     }
     if (!userId) {
-      return new Response(JSON.stringify({ error: "Failed to create user", detail: errBody }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      })
+      return json({ error: "Failed to create user", detail: errBody }, 500)
     }
   }
 
@@ -92,18 +103,12 @@ async function handleLicense(req, env) {
 
   if (!licRes.ok) {
     const errBody = await licRes.json()
-    return new Response(JSON.stringify({ error: "Failed to create license", detail: errBody }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    })
+    return json({ error: "Failed to create license", detail: errBody }, 500)
   }
 
   const lic = (await licRes.json()).data
 
-  return new Response(JSON.stringify({ license_key: lic.attributes.key }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  })
+  return json({ license_key: lic.attributes.key })
 }
 
 async function handleUpdate(req, env) {
