@@ -149,11 +149,13 @@ pub async fn verify_license(license_key: &str, device_id: &str) -> Result<bool, 
         if act_response.status().is_success() {
             return Ok(true);
         } else {
+            let status = act_response.status();
             let error_text = act_response.text().await.unwrap_or_default();
+            eprintln!("Keygen machine creation failed ({}): {}", status, error_text);
             if error_text.contains("machine limit") {
                 return Err("Hai raggiunto il limite massimo di dispositivi consentiti per questa licenza (3/3).".to_string());
             } else {
-                return Err(format!("Impossibile attivare il dispositivo: la licenza potrebbe essere scaduta o non valida."));
+                return Err(format!("Impossibile attivare il dispositivo (errore {}): {}.", status, error_text));
             }
         }
     }

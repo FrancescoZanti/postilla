@@ -587,10 +587,11 @@ function App() {
     setLicenseError("");
     setLicenseKey("");
     try {
+      const deviceId = await invoke<string>("get_device_id");
       const res = await fetch("https://postilla-get-license.w61mm5pqt.workers.dev", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, deviceId }),
       });
       const data = await res.json();
       if (data.license_key) {

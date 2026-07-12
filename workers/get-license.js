@@ -39,7 +39,7 @@ async function handleLicense(req, env) {
     return json({ error: "Method not allowed" }, 405)
   }
 
-  const { email } = await req.json()
+  const { email, deviceId } = await req.json()
   if (!email || !email.includes("@")) {
     return json({ error: "Invalid email address" }, 400)
   }
@@ -107,8 +107,40 @@ async function handleLicense(req, env) {
   }
 
   const lic = (await licRes.json()).data
+  const licenseKey = lic.attributes.key
 
-  return json({ license_key: lic.attributes.key })
+  // 3. Create a machine (device binding) if deviceId provided
+  if (deviceId) {
+    const machRes = await fetch(`${BASE}/machines`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${KEYGEN_API_TOKEN}`,
+        "Content-Type": "application/vnd.api+json",
+        Accept: "application/vnd.api+json",
+      },
+      body: JSON.stringify({
+        data: {
+          type: "machines",
+          attributes: {
+            fingerprint: deviceId,
+            name: `Device ${deviceId.slice(0, 8)}`,
+          },
+          relationships: {
+            license: {
+              data: { type: "licenses", id: lic.id },
+            },
+          },
+        },
+      }),
+    })
+
+    if (!machRes.ok) {
+      const machErr = await machRes.text()
+      console.error("Machine creation failed:", machErr)
+    }
+  }
+
+  return json({ license_key: licenseKey })
 }
 
 async function handleUpdate(req, env) {
